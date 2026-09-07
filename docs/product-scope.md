@@ -1,10 +1,10 @@
 # Product Scope — GoldenLoop
 
-Status: GoldenLoop is the selected project name; user goals and accepted CI paths are captured. Other MVP cuts and implementation details below remain recommendations pending confirmation.
+This document defines the GoldenLoop MVP scope. Implementation is pending.
 
 ## Product thesis
 
-Turn spreadsheet examples and interactive debugging into reviewable, versioned regression tests that run both in the workbench and in an agent's own repository. The differentiator is the feedback-to-test loop, including tool behavior, rather than merely another judge dashboard.
+Turn spreadsheet examples and interactive debugging into reviewed, versioned regression tests that run both in the workbench and in an agent's own repository. Cover answers and tool behavior in the same feedback-to-test workflow.
 
 ## Primary workflows
 
@@ -31,7 +31,7 @@ Choose a dataset release, agent revision, evaluator configuration, and execution
 - Hosted: request agent invocation and evaluation; consume a machine-readable gate result. Hosted scoring of externally generated answers/traces is deferred.
 - Repository-local: export a pinned case bundle and a thin test wrapper using the same SDK. Run without depending on this workbench's backend.
 
-## Recommended MVP boundary
+## MVP scope
 
 - One workbench UI and backend; one configured, instrumented agent with safe demo tools.
 - Excel and CSV import with mapping and row validation.
@@ -39,7 +39,7 @@ Choose a dataset release, agent revision, evaluator configuration, and execution
 - Answer feedback and tool argument/behavior annotations.
 - Candidate editing, explicit approval, and immutable golden releases.
 - A small evaluator set: required/forbidden content, structured output, tool name/argument assertions, and one judge rubric.
-- One SDK language, hosted execution API, and exported tests using the same core.
+- Python evaluation SDK, hosted execution API, and exported tests using the same core.
 - Results view and one CI example showing a failed gate, a code fix, and a passing gate.
 
 Defer autonomous user simulation, multiple agent-framework adapters, two-language SDKs, multi-tenant administration, model training, and a full observability platform. Production hardening is separate; access control, redaction, and safe tool execution remain required for any real data.

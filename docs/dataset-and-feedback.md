@@ -1,6 +1,6 @@
 # Dataset and Feedback Design
 
-Status: proposed logical model. Review workflow and exact field names remain to be confirmed.
+This document defines the canonical dataset model and review workflow. Publication requires approved case revisions.
 
 ## One canonical representation
 
@@ -10,7 +10,7 @@ Spreadsheets are an input convenience; versioned structured cases are the intern
 |---|---|
 | Case revision | Stable case ID, revision, title, tags, source, scenario context, ordered turns, expectations, check references, fixtures |
 | Observation | Case revision or chat session, agent revision, actual messages, observable tool spans, usage/latency, trace completeness |
-| Feedback | Reviewer, time, observed answer/call reference, issue type, comment, proposed correction, review status |
+| Feedback | Reviewer, time, observed answer/call reference, issue type, comment, unreviewed correction, review status |
 | Dataset release | Immutable selection of approved case revisions, schema version, content hash, publisher/time |
 | Evaluation run | Dataset release, agent/evaluator/judge versions, observations, check results, gate result |
 
@@ -20,7 +20,7 @@ Keep reference answers distinct from generated answers. A reference answer may i
 
 Simple template: `case_id` (optional), `question`, `reference_answer`, `scenario`, `tags`. At least an input is required to save a candidate; publication requires actionable reviewed expectations.
 
-For multi-turn input add `scenario_id` and `turn_index`; each row supplies a scripted user turn and optional expected answer. Validate grouping and ordering. Tool expectations can be added in the UI first; a later workbook format may offer a separate tool-expectations sheet rather than JSON-filled cells.
+For multi-turn input add `scenario_id` and `turn_index`; each row supplies a scripted user turn and optional expected answer. Validate grouping and ordering. Add tool expectations in the UI; spreadsheet import of nested tool expectations is outside the MVP.
 
 Provide column mapping, preview, row errors, blank/duplicate handling, encoding checks, source file/sheet/row metadata, and deliberate merge-versus-new-case selection. Do not execute formulas or macros; flag formula cells that cannot be reliably read. Escape spreadsheet formula injection when exporting human-readable CSV.
 
@@ -38,11 +38,11 @@ Feedback can target an answer, a specific observed call, or a missing call at a 
 
 Example: observed `lookup_customer({"customer_id":"C-999"})`; reviewer verifies the scenario requires `C-123`. Preserve the observed call and add a separate expected assertion on `customer_id`. Do not replace trace history or use the bad answer as the reference answer.
 
-A reviewer may accept a proposed correction, reject feedback, or leave it unresolved. Repeated cases should be detected for review rather than silently duplicated. Keep reviewer attribution and edit reasons.
+A reviewer can accept a correction, reject feedback, or leave it unresolved. Detect repeated cases for review rather than silently duplicating them. Keep reviewer attribution and edit reasons.
 
 ## Expressing tool expectations
 
-Prefer semantic constraints over an exact trace snapshot:
+Match tool expectations using semantic constraints, not exact trace snapshots:
 
 - Required/forbidden tool name, turn scope, occurrence bounds
 - Argument-path checks: exact, subset, type/schema, range, or explicit predicate from the supported declarative set

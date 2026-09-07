@@ -1,6 +1,6 @@
 # Evaluation and CI Gate Design
 
-Status: proposed evaluator semantics and validation requirements.
+This document defines evaluation semantics, CI gate policy, and validation requirements.
 
 ## Evaluate multiple layers separately
 
@@ -28,21 +28,21 @@ Using the same model family for agent and judge can introduce correlated errors;
 
 Each check returns `pass`, `fail`, `error`, or `skipped`, plus reason, evidence, evaluator version, and optional score. The run separately reports completion status and aggregate gate status.
 
-Proposed CI defaults:
+CI gate policy:
 
-- All selected cases and required checks must execute successfully.
+- All selected cases must execute and every required check must pass.
 - Any critical deterministic failure blocks the gate.
 - Missing required telemetry, failed evaluators, unresolved required checks, or zero selected cases block the gate as incomplete/error.
 - Apply an explicit threshold for judge-based criteria and report per-case failures, not only an average.
 - Optional/skipped checks are visible and never inflate the denominator of passed checks.
 - Retries are bounded and logged; do not retry flaky judgments until they pass.
 
-Thresholds and criticality require user/domain-owner agreement before implementation. CLI exit codes must distinguish success from gate failure and execution/configuration error.
+Numeric thresholds and check criticality are versioned configuration approved by the domain owner. Missing required configuration blocks execution. CLI exit codes distinguish success from gate failure and execution/configuration error.
 
 ## Execution modes
 
 - **Live end-to-end:** invoke the agent against sandbox tools, capture observations, then evaluate.
-- **Recorded-output scoring:** evaluate submitted answers/traces; proves evaluator behavior on those observations, not a fresh agent run.
+- **Recorded-output scoring:** the SDK evaluates supplied answers/traces; this tests those observations, not a fresh agent run. The hosted submitted-output scoring endpoint is deferred.
 - **Mock/replay:** deterministic fixtures for tool responses and checks; not evidence of live integration reliability.
 
 Label the mode and environment on every report. Reset scenario state between cases and use explicit fixture versions. Tests must not accidentally interact with production write-capable tools.

@@ -6,7 +6,7 @@ Based on the user-supplied InSpireD (ISD) brief: **Hack for Evals — From AI De
 
 The challenge shifts evaluation from the model alone to the complete AI workflow: correct, useful, safe, repeatable, and economically viable outcomes in real delivery work. It mentions online/offline diagnostics, regression suites, human judging, LLM-as-a-judge where appropriate, RLVR, and feedback loops as approaches, not a requirement to implement every technique.
 
-## Requested outputs and proposed product coverage
+## Requested outputs and MVP design coverage
 
 | Requested output | Workbench coverage |
 |---|---|
@@ -20,4 +20,4 @@ The challenge shifts evaluation from the model alone to the complete AI workflow
 - Synthetic examples can demonstrate the workflow but do not satisfy evidence of real customer coverage. Obtaining permitted, sanitized customer scenarios remains an open dependency.
 - Capturing feedback alone does not prove improvement. Demonstrate a detected failure, a corrected agent implementation, and a subsequent regression run.
 - Judge scores are measurements under a rubric, not infallible ground truth.
-- The MVP need not implement reinforcement learning or autonomous agent rewriting.
+- Reinforcement learning and autonomous agent rewriting are outside the MVP.

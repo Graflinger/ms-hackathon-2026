@@ -6,10 +6,10 @@
 
 GoldenLoop highlights the defining loop: interaction, feedback, reviewed golden cases, and regression evaluation.
 
-## Recommended registration wording
+## Registration pitch
 
 **GoldenLoop — From Agent Feedback to Golden Tests**
 
-An end-to-end evaluation workbench that turns spreadsheets and interactive agent feedback into reviewed, versioned golden datasets. Inspect answers and tool calls, evaluate with AI judges and deterministic checks, and run the same tests through hosted APIs or directly in agent repositories using a shared SDK. Built with Microsoft Agent Framework and Foundry-native models.
+An end-to-end evaluation workbench that turns spreadsheets and interactive agent feedback into reviewed, versioned golden datasets. Inspect answers and tool calls, evaluate with AI judges and deterministic checks, and run the same tests through hosted APIs or directly in agent repositories using a shared SDK. The implementation uses Microsoft Agent Framework and Foundry-native models.
 
 This describes the intended product, not an already implemented capability. The name does not imply official Microsoft product branding.
