@@ -1,34 +1,29 @@
-# Research and Evidence Register
+# Research and Evidence — Evals
 
-The challenge explicitly requires disciplined claims. Add every material product claim here before using it in a pitch.
+## Evidence discipline
 
-## Evidence labels
+Label claims as **proposed**, **specified**, **observed** (with conditions and sample size), **externally supported** (with a source), or **validated** (against a predefined representative validation plan). Current designs are proposals, not implemented or validated capabilities. No external technology compatibility research has yet been performed for this design.
 
-- **Observed:** measured in our prototype or dataset; describe conditions and sample size.
-- **Specified:** algorithm, interface, or process is fully described but not validated.
-- **Proposed:** idea or intended method not yet fully implemented.
-- **Externally supported:** backed by a cited external source, but not necessarily reproduced by us.
-- **Validated:** meets a predefined validation plan on representative data. Use sparingly.
+## Validation backlog
 
-## Claim register
+| Question / proposed claim | Required evidence |
+|---|---|
+| Hosted and exported checks behave consistently | Run identical fixtures/configurations through both paths; deterministic results must match. Separately measure judge variability. |
+| Tool feedback detects wrong behavior | Fixtures for wrong tool, parameter, omission, forbidden call, and alternative valid trajectories. |
+| Judge rubric agrees with domain reviewers | Independently labeled cases, disagreements, false-pass/false-fail rates, and repeated runs. |
+| Feedback closes the regression loop | Preserve a failing agent revision, approved case, corrected revision, and comparable results. |
+| Dataset covers customer delivery work | Permitted sanitized customer cases and a coverage inventory; synthetic examples clearly separated. |
+| Traces can be obtained from the first agent | Verify actual framework hooks, async correlation, argument/result visibility, redaction, and export completeness. |
+| CI gates fail safely | Deliberate timeouts, missing traces, malformed judge output, empty selections, and evaluator failures. |
 
-| Claim | Current status | Needed evidence / limitation |
-|---|---|---|
-| Image representations make token use more efficient than text. | Proposed; unverified and too broad | Test specific models, image settings, prices, tasks, acceptance quality, retries, latency, and accessibility. Compare total outcome cost, not token count alone. |
-| Shorter agent instructions reduce cost without reducing quality. | Proposed | Controlled benchmark across representative tasks; account for retries and acceptance. |
-| Fewer or more targeted MCP tools improve agent yield. | Proposed | Define “stale” and “too many”; measure selection accuracy, context overhead, task success, and cost. |
-| Cost distributions have commercially important expensive tails. | Challenge premise; not yet observed in this project | Demonstrate with real or clearly labeled synthetic run data; report distribution and assumptions. |
-| The estimation model predicts presales cost intervals reliably. | Not yet specified or validated | Define calibration/backtesting protocol; until then call intervals scenario-based estimates. |
+## Technical research to perform after stack selection
 
-## Research backlog
-
-1. Confirm telemetry and billing granularity available from Azure AI Foundry/Azure OpenAI, GitHub Models, and GitHub Copilot.
-2. Review Microsoft FinOps guidance and Cost Management allocation/export schemas.
-3. Select defensible interval and tail-risk methods suitable for sparse presales data.
-4. Define a practical engagement risk rubric.
-5. Design acceptance-event and human-rework capture.
-6. Test image-versus-text economics under controlled conditions if retained.
+- Check official Microsoft evaluation tooling for reusable evaluators before building equivalents.
+- Verify structured judge output support, deployment availability, auth, quotas, and pricing in the available Azure environment.
+- Check instrumentation support and trace formats for the chosen agent; adapt OpenTelemetry where supported.
+- Confirm spreadsheet parser behavior, file limits, and safe export handling.
+- Confirm SDK packaging/distribution and GitHub Actions integration in the chosen language.
 
 ## Minimum experiment record
 
-For each experiment retain: hypothesis, task and dataset, model/version, configuration, date, price assumptions, number of attempts, acceptance rule, token/compute cost, latency, retries, human effort, result, and limitations.
+Store dataset release/hash, case revisions, agent revision, tool/mock environment, SDK/evaluator versions, judge model/deployment and prompt version, run configuration, timestamps, statuses, quality scores, latency, usage/cost basis, reviewer decisions, repetitions, and limitations.

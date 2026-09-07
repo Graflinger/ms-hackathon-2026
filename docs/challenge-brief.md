@@ -1,52 +1,23 @@
-# Challenge Brief
+# Challenge Brief — Hack for Evals
 
-## Source
+## Source and context
 
-This summary is based on the InSpireD (ISD) “Hack for Token Yield — The AI Unit Economics Challenge” description supplied by the project owner on 2026-08-25.
+Based on the user-supplied InSpireD (ISD) brief: **Hack for Evals — From AI Demos to Learning Systems**. Motto: **If we can't measure it, we don't ship it.** Sponsors named in the brief: Edwina Fitzmaurice and Sarah Mocke. This is an internal Microsoft hackathon.
 
-## Context
+The challenge shifts evaluation from the model alone to the complete AI workflow: correct, useful, safe, repeatable, and economically viable outcomes in real delivery work. It mentions online/offline diagnostics, regression suites, human judging, LLM-as-a-judge where appropriate, RLVR, and feedback loops as approaches, not a requirement to implement every technique.
 
-Industry Solutions Delivery (ISD) provides AI-first consulting and takes end-to-end accountability for complex, outcome-based customer delivery. Existing cost views can report subscriptions, cloud bills, and model consumption, but often cannot answer what an accepted feature, closed case, or successfully migrated workload actually cost.
+## Requested outputs and proposed product coverage
 
-Tokens do not map predictably to outcomes. Retries, failed or abandoned attempts, and human rework produce substantial variance. Averages can therefore conceal expensive outliers and threaten fixed-price margins.
+| Requested output | Workbench coverage |
+|---|---|
+| Reusable eval harnesses and rubrics for delivery agents | Shared evaluation SDK, versioned rubrics, case schema, agent adapters |
+| CI/CD quality gates and cost-quality tradeoff dashboards | Hosted API and repository test bundles; gate status, quality, latency, and usage/cost comparison |
+| Evaluation datasets drawn from real customer scenarios | Excel/CSV import and reviewed chat-derived cases with provenance and sanitization |
+| Feedback loops that improve delivery systems over time | Answer/tool feedback becomes regression cases; compare agent revisions against a fixed dataset release |
 
-## Problem to solve
+## Evidence and scope boundaries
 
-Make AI delivery uncertainty measurable before commercial commitment and traceable during delivery. The result should help teams:
-
-- connect spend to accepted work;
-- estimate credible outcome-cost ranges from information available during scoping;
-- quantify costly tail risk;
-- assess whether expected return justifies that risk; and
-- fit those measures into existing finance and FinOps practices.
-
-## Expected outputs
-
-### 1. Yield ledger
-
-Report cost per accepted outcome with traceability from spend through attempts to the delivered artifact and acceptance decision.
-
-### 2. Presales estimation model
-
-Return defensible intervals, not just point estimates. List assumptions and use scoping inputs that could realistically be known before delivery.
-
-### 3. Risk-classification rubric
-
-Specify a repeatable rubric that a delivery lead can apply to a live engagement.
-
-### 4. FinOps chargeback mapping
-
-Map token consumption and derived outcome costs to existing allocation concepts such as tenant, subscription, resource group, cost center, engagement, environment, workload, and owner.
-
-### 5. Evidence standards
-
-Clearly distinguish methods that are specified or proposed from those that have been tested or validated. State limitations.
-
-## Scope boundary
-
-This is not primarily a prompt-shortening or cheapest-model competition. Efficiency techniques are relevant when their effect is translated into outcome yield, forecast confidence, and commercial risk.
-
-## Sponsor and environment notes
-
-- Internal Microsoft hackathon; favor Microsoft technologies and integration points.
-- Sponsors named in the supplied description: Edwina Fitzmaurice, Sarah Mocke, and Gareth Bland.
+- Synthetic examples can demonstrate the workflow but do not satisfy evidence of real customer coverage. Obtaining permitted, sanitized customer scenarios remains an open dependency.
+- Capturing feedback alone does not prove improvement. Demonstrate a detected failure, a corrected agent implementation, and a subsequent regression run.
+- Judge scores are measurements under a rubric, not infallible ground truth.
+- The MVP need not implement reinforcement learning or autonomous agent rewriting.

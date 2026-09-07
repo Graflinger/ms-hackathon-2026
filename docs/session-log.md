@@ -1,20 +1,29 @@
-# Session Log
+# Session Log — Evals
 
-## 2026-08-25 — Project initialization
+## 2026-09-07 — Evals-only scope and product definition
 
-- Captured the ISD Hack for Token Yield challenge and Microsoft-first constraint.
-- Recorded initial concepts: image-based context compression, “caveman,” agent-configuration best-practice checks, a lowest-cost Copilot benchmark challenge, and a possible integrated suite.
-- Recommended an AI Yield Suite narrative with the yield ledger and presales estimation/risk model at its core.
-- Identified the benchmark as a strong demo, the checker as a supporting diagnostic, and image compression as an experiment requiring evidence.
-- Created the living documentation structure.
-- Confirmed the folder was already an initialized Git repository with no commits.
-- Open question: clarify what “caveman” means.
+- User selected Hack for Evals exclusively and requested removal of unrelated challenge material from active documentation.
+- Defined an end-to-end UI/backend: Excel/CSV scenarios, interactive chat, tool-call inspection, and feedback on answers and tool parameters/behavior.
+- Both imported scenarios and chat feedback should feed an editable golden evaluation dataset.
+- Evaluation should support AI-as-a-judge and other checks, with external CI/CD access.
+- User proposed hosted evaluation and exportable agent-repository tests, backed by shared SDK logic.
+- Recommended reviewed candidates, immutable dataset releases, explicit tool expectations, deterministic checks, and trace-aware agent adapters.
+- Recorded the distinction between observable execution traces and hidden model reasoning, and between platform-independent tests and completely offline tests.
+- Added product, architecture, dataset, evaluation, and evidence documentation. No application implementation, commit, or push performed in this session.
+- Repository is on `main`, with remote https://github.com/Graflinger/ms-hackathon-2026.git.
 
-## 2026-08-25 — Broader challenge comparison
+## 2026-09-07 — Framework, team, model access, and CI clarification
 
-- Received Business Outcomes, 2x Efficiency, Transformation, Evals, and Scaled IP briefs; Evals was listed twice.
-- Compared these with the original Token Yield challenge for ease of building a credible submission.
-- Recommended Transformation — No Plan, No Play as the easiest: it has narrow outputs and does not require historical telemetry or longitudinal proof.
-- Proposed a Transformation Qualifier that extracts evidence, asks for missing information, applies a transparent rubric, flags weak opportunities, and drafts the thesis, value hypothesis, outcomes, and exit criteria.
-- Ranked Business Outcomes second; Evals third; 2x fourth; Token Yield fifth; and Scaled IP sixth by implementation/evidence burden.
-- Kept the selection proposed pending confirmation from the project owner.
+- User selected Microsoft Agent Framework for a new demo agent; no existing agent is available.
+- Confirmed a three-person team with sufficient time for now; exact deadline remains open.
+- User wants models native to Foundry, including OpenAI, Microsoft, and open-source offerings; specific deployments/capabilities still need verification.
+- Start with synthetic data and retain the option for authorized real data later.
+- User requested clarification of hosted CI choices. Documented who executes the agent versus who evaluates observations for hosted invocation, submitted-output scoring, and repository-local SDK tests.
+- Recommended hosted invocation first to reuse the chat integration, without dropping repository-local tests or conflating submitted-output scoring with local evaluation. Priority remains proposed.
+
+## 2026-09-07 — CI scope accepted and GoldenLoop selected
+
+- User accepted Path 1A (hosted invocation/evaluation) and Path 2 (repository-local exported SDK tests) as the initial scope.
+- Path 1B (hosted scoring of submitted outputs) is deferred; execution and evaluation remain separate internally.
+- User selected **GoldenLoop** for hackathon registration. Retained its proposed registration pitch and removed alternative names. Registration and availability checks have not been performed here.
+- User requested the move toward implementation and an end to automatic documentation updates. Future guide, decision-log, session-log, and topic-document changes require an explicit request.
