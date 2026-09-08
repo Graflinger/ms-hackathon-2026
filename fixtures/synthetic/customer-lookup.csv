@@ -1,0 +1,2 @@
+case_id,question,reference_answer,scenario,tags
+synthetic-customer-lookup,Look up customer C-123,Synthetic Alpine Bikes is a gold tier customer.,Synthetic customer lookup candidate; not reviewed or golden approved.,synthetic;customer-lookup

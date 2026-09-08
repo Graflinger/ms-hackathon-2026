@@ -1,0 +1,432 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
+import { Download, LockKeyhole, Plus } from "lucide-react";
+import { api, ApiError } from "../api";
+import {
+  DateLabel,
+  EmptyState,
+  ErrorState,
+  JsonView,
+  Loading,
+  Notice,
+  PageHeader,
+  SectionHeading,
+  ShortId,
+  TextLink,
+} from "../components";
+
+function ReleaseInspector({ releaseId }: { releaseId: string }) {
+  const release = useQuery({
+    queryKey: ["release", releaseId],
+    queryFn: ({ signal }) => api.release(releaseId, signal),
+  });
+  if (release.isPending)
+    return <Loading label="Loading immutable release..." />;
+  if (release.isError)
+    return <ErrorState error={release.error} retry={() => release.refetch()} />;
+  return (
+    <section className="panel">
+      <SectionHeading
+        title={release.data.name}
+        detail="Immutable golden dataset snapshot"
+        action={
+          <a className="button" href={api.exportUrl(releaseId)} download>
+            <Download size={16} />
+            Export test bundle
+          </a>
+        }
+      />
+      <div className="detail-body">
+        <div className="release-meta">
+          <div>
+            <span className="small-label">RELEASE ID</span>
+            <code>{release.data.id}</code>
+          </div>
+          <div>
+            <span className="small-label">CONTENT HASH</span>
+            <code>{release.data.content_hash}</code>
+          </div>
+          <div>
+            <span className="small-label">CREATED</span>
+            <DateLabel value={release.data.created_at} />
+          </div>
+          <div>
+            <span className="small-label">PINNED CASES</span>
+            <strong>{release.data.case_count}</strong>
+          </div>
+        </div>
+        <Notice>
+          Exports are downloaded directly from the backend as ZIP bundles. Case
+          revisions are frozen; editing a candidate cannot rewrite this release.
+        </Notice>
+        {release.data.cases?.length ? (
+          release.data.cases.map((item) => (
+            <details
+              key={`${item.id}-${item.revision}`}
+              className="check-details"
+            >
+              <summary>
+                <strong>{item.title}</strong>
+                <span className="muted">
+                  r{item.revision} / {item.checks.length} checks
+                </span>
+              </summary>
+              <JsonView value={item} />
+            </details>
+          ))
+        ) : (
+          <EmptyState title="No cases returned">
+            The API returned no case content for this release.
+          </EmptyState>
+        )}
+        <TextLink to={`/runs?release=${releaseId}`}>
+          Evaluate this release
+        </TextLink>
+      </div>
+    </section>
+  );
+}
+
+export default function Releases() {
+  const client = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("release");
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [expectedRevisions, setExpectedRevisions] = useState<
+    Record<string, number>
+  >({});
+  const [confirmed, setConfirmed] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const releases = useQuery({
+    queryKey: ["releases"],
+    queryFn: ({ signal }) => api.releases(signal),
+  });
+  const cases = useQuery({
+    queryKey: ["cases"],
+    queryFn: ({ signal }) => api.cases(signal),
+    enabled: creating,
+  });
+  const eligible =
+    cases.data?.filter(
+      (record) => record.status === "approved" && record.case.id,
+    ) ?? [];
+  const selectedIds = Object.keys(expectedRevisions);
+  const staleIds = selectedIds.filter(
+    (id) =>
+      !eligible.some(
+        (record) =>
+          record.case.id === id &&
+          record.case.revision === expectedRevisions[id],
+      ),
+  );
+  const create = useMutation({
+    mutationFn: () =>
+      api.createRelease(name.trim(), selectedIds, expectedRevisions),
+    onError: async (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        setConflict(true);
+        setExpectedRevisions({});
+        setConfirmed(false);
+        await Promise.all([
+          client.invalidateQueries({ queryKey: ["cases"] }),
+          client.invalidateQueries({ queryKey: ["case"] }),
+          client.invalidateQueries({ queryKey: ["releases"] }),
+        ]);
+      }
+    },
+    onSuccess: (release) => {
+      client.invalidateQueries({ queryKey: ["releases"] });
+      client.invalidateQueries({ queryKey: ["summary"] });
+      setParams({ release: release.id });
+      setCreating(false);
+      setName("");
+      setExpectedRevisions({});
+      setConfirmed(false);
+      setConflict(false);
+      setNotice(
+        `Release "${release.name}" created with ${release.case_count} cases.`,
+      );
+    },
+  });
+  return (
+    <>
+      <PageHeader
+        eyebrow="04 / FREEZE THE STANDARD"
+        title="A reference you can return to."
+        description="Publish reviewed cases as immutable golden releases. Keep evaluations reproducible and export self-contained test bundles."
+        action={
+          <button
+            className="button"
+            onClick={() => setCreating((value) => !value)}
+          >
+            <Plus size={16} />
+            Create release
+          </button>
+        }
+      />
+      {notice && <Notice tone="success">{notice}</Notice>}
+      {creating && (
+        <section className="panel">
+          <SectionHeading
+            title="Publish a golden release"
+            detail="Only the latest approved cases are eligible. The backend validates approval again at publication."
+          />
+          <form
+            className="form-stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (
+                !confirmed ||
+                !selectedIds.length ||
+                staleIds.length ||
+                cases.isFetching ||
+                cases.isError ||
+                create.isPending
+              )
+                return;
+              create.mutate();
+            }}
+          >
+            <label>
+              Release name
+              <input
+                required
+                disabled={create.isPending}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="A meaningful name for this evaluation baseline"
+              />
+            </label>
+            {cases.isPending ? (
+              <Loading label="Loading approved cases..." />
+            ) : cases.isError ? (
+              <ErrorState error={cases.error} retry={() => cases.refetch()} />
+            ) : !eligible.length ? (
+              <EmptyState
+                title="No approved cases available"
+                action={<TextLink to="/candidates">Go to review desk</TextLink>}
+              >
+                A candidate must be explicitly approved before it can join a
+                golden release.
+              </EmptyState>
+            ) : (
+              <fieldset
+                className="case-selection"
+                disabled={create.isPending || cases.isFetching}
+              >
+                <legend>Select approved case revisions</legend>
+                <label className="checkbox-label select-all">
+                  <input
+                    type="checkbox"
+                    checked={
+                      selectedIds.length === eligible.length && !staleIds.length
+                    }
+                    onChange={(event) => {
+                      setConfirmed(false);
+                      setExpectedRevisions(
+                        event.target.checked
+                          ? Object.fromEntries(
+                              eligible.map((record) => [
+                                record.case.id!,
+                                record.case.revision,
+                              ]),
+                            )
+                          : {},
+                      );
+                    }}
+                  />
+                  Select all eligible cases ({eligible.length})
+                </label>
+                {eligible.map((record) => (
+                  <label
+                    className="checkbox-label selection-row"
+                    key={record.case.id}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={
+                        expectedRevisions[record.case.id!] ===
+                        record.case.revision
+                      }
+                      onChange={(event) => {
+                        setConfirmed(false);
+                        setExpectedRevisions((previous) =>
+                          event.target.checked
+                            ? {
+                                ...previous,
+                                [record.case.id!]: record.case.revision,
+                              }
+                            : Object.fromEntries(
+                                Object.entries(previous).filter(
+                                  ([id]) => id !== record.case.id,
+                                ),
+                              ),
+                        );
+                      }}
+                    />
+                    <span>
+                      <strong>{record.case.title}</strong>
+                      <small>
+                        Revision {record.case.revision} /{" "}
+                        {record.case.checks.length} checks
+                      </small>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            {staleIds.length > 0 && (
+              <Notice tone="warning">
+                Selected revisions changed or are no longer approved:{" "}
+                {staleIds
+                  .map((id) => `${id} / revision ${expectedRevisions[id]}`)
+                  .join(", ")}
+                . No newer revision has been selected automatically. Review the
+                current cases and select again.
+                <button
+                  className="button small secondary"
+                  type="button"
+                  disabled={create.isPending}
+                  onClick={() => {
+                    setExpectedRevisions({});
+                    setConfirmed(false);
+                  }}
+                >
+                  Clear selection
+                </button>
+              </Notice>
+            )}
+            {conflict && (
+              <Notice tone="warning">
+                Publication conflict. Selections and confirmation were cleared;
+                the latest cases are being reloaded. Review and reselect the
+                revisions before publishing again. Nothing was automatically
+                retried or replaced.
+              </Notice>
+            )}
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                required
+                disabled={
+                  create.isPending ||
+                  !!staleIds.length ||
+                  cases.isFetching ||
+                  !selectedIds.length
+                }
+                checked={confirmed && !staleIds.length}
+                onChange={(event) => setConfirmed(event.target.checked)}
+              />
+              Publish an immutable release of these approved revisions.
+            </label>
+            {create.error && <ErrorState error={create.error} />}
+            <div className="form-actions">
+              <button
+                className="button"
+                disabled={
+                  create.isPending ||
+                  !name.trim() ||
+                  !selectedIds.length ||
+                  !!staleIds.length ||
+                  !confirmed ||
+                  cases.isError ||
+                  cases.isFetching
+                }
+              >
+                <LockKeyhole size={15} />
+                {create.isPending
+                  ? "Publishing..."
+                  : `Publish ${selectedIds.length} selected cases`}
+              </button>
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => setCreating(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+      <section className="panel">
+        <SectionHeading
+          title="Golden releases"
+          detail="Every snapshot has its own content hash and pinned case revisions."
+        />
+        {releases.isPending ? (
+          <Loading />
+        ) : releases.isError ? (
+          <ErrorState error={releases.error} retry={() => releases.refetch()} />
+        ) : !releases.data.length ? (
+          <EmptyState
+            title="Set your first quality baseline"
+            action={<TextLink to="/candidates">Review candidates</TextLink>}
+          >
+            Approve the cases you trust, then publish them together as a golden
+            release.
+          </EmptyState>
+        ) : (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Release</th>
+                  <th>Cases</th>
+                  <th>Content hash</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {releases.data.map((release) => (
+                  <tr
+                    key={release.id}
+                    className={selected === release.id ? "selected-row" : ""}
+                  >
+                    <td>
+                      <strong>{release.name}</strong>
+                      <div className="cell-sub">
+                        <ShortId value={release.id} />
+                      </div>
+                    </td>
+                    <td>{release.case_count}</td>
+                    <td>
+                      <ShortId value={release.content_hash} />
+                    </td>
+                    <td>
+                      <DateLabel value={release.created_at} />
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="button small secondary"
+                          onClick={() => setParams({ release: release.id })}
+                        >
+                          Inspect
+                          <span className="sr-only"> {release.name}</span>
+                        </button>
+                        <a
+                          className="icon-button"
+                          href={api.exportUrl(release.id)}
+                          download
+                          aria-label={`Export ${release.name}`}
+                        >
+                          <Download size={17} />
+                        </a>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      {selected && <ReleaseInspector key={selected} releaseId={selected} />}
+    </>
+  );
+}

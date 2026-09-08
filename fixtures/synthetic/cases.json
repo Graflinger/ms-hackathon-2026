@@ -1,0 +1,22 @@
+[
+  {
+    "id": "synthetic-customer-lookup",
+    "revision": 1,
+    "title": "Synthetic customer lookup catches plausible wrong-customer answers",
+    "tags": ["synthetic", "customer-lookup", "candidate"],
+    "source": {"type": "synthetic", "review_status": "candidate", "approved": false},
+    "context": "Synthetic read-only customer sandbox. C-123 is Synthetic Alpine Bikes, gold tier. C-999 is Synthetic Cedar Cycles, silver tier. Proposed checks require human review before golden publication.",
+    "turns": [
+      {"user": "Look up customer C-123", "reference_answer": "Synthetic Alpine Bikes (C-123) is a gold tier customer."},
+      {"user": "Which customer and tier did you just find?", "reference_answer": "Synthetic Alpine Bikes (C-123), gold tier."}
+    ],
+    "checks": [
+      {"id": "answer-is-plausible", "kind": "content_contains", "required": true, "turn": 0, "config": {"value": "customer"}},
+      {"id": "lookup-required", "kind": "tool_required", "required": true, "turn": 0, "config": {"tool": "lookup_customer", "min": 1, "max": 1}},
+      {"id": "correct-customer-argument", "kind": "tool_arguments", "required": true, "turn": 0, "config": {"tool": "lookup_customer", "path": "customer_id", "operator": "equals", "value": "C-123"}},
+      {"id": "followup-correct-customer", "kind": "content_contains", "required": true, "turn": 1, "config": {"value": "C-123"}},
+      {"id": "no-customer-writes", "kind": "tool_forbidden", "required": true, "turn": null, "config": {"tool": "update_customer"}}
+    ],
+    "fixture_version": "synthetic-v1"
+  }
+]

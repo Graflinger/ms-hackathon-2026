@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python and mock integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      UV_PYTHON: "3.12"
+      GOLDENLOOP_ALLOW_LIVE_SYNTHETIC: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.12"
+          enable-cache: true
+      - run: uv sync --locked --all-packages --all-extras
+      - name: Lint Python
+        run: uv run --no-sync ruff check --config pyproject.toml packages apps/api examples/agent-tests tests/e2e
+      - name: Unit and standalone bundle tests
+        run: uv run --no-sync pytest packages apps/api/tests examples/agent-tests --junitxml=test-results/python.xml
+      - name: Local HTTP workflow and offline exported bundle
+        run: uv run --no-sync pytest tests/e2e --junitxml=test-results/e2e.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-test-results
+          path: test-results/*.xml
+          if-no-files-found: ignore
+
+  standalone:
+    name: SDK bundle without backend installed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      UV_PYTHON: "3.12"
+      GOLDENLOOP_ASSERT_NO_API: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.12"
+          enable-cache: true
+      - run: uv sync --frozen --package goldenloop-demo-agent --extra test --no-default-groups
+      - run: uv run --no-sync pytest -c examples/agent-tests/pytest.ini examples/agent-tests
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build
+
+  browser:
+    name: Local mock browser workflow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      UV_PYTHON: "3.12"
+      GOLDENLOOP_LOCAL_DEMO: "true"
+      GOLDENLOOP_ALLOW_LIVE_SYNTHETIC: "false"
+      GOLDENLOOP_DATA_DIR: ${{ runner.temp }}/goldenloop-browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.12"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: uv sync --frozen --all-packages
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web run check:api
+      - run: npm --prefix apps/web run build
+      - run: uv run --no-sync playwright install --with-deps chromium
+      # Browser fixtures own temporary data and loopback-only server lifecycle.
+      - name: Browser smoke tests (local synthetic only)
+        run: uv run --no-sync pytest tests/browser --junitxml=test-results/browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-test-results
+          path: test-results/
+          if-no-files-found: ignore

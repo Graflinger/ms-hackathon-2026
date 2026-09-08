@@ -1,0 +1,40 @@
+[project]
+name = "goldenloop"
+version = "0.1.0"
+description = "GoldenLoop evaluation workbench development workspace"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.25,<2",
+  "httpx>=0.28,<1",
+  "ruff>=0.11,<1",
+  "playwright>=1.50,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/goldenloop_eval", "packages/goldenloop_demo_agent", "apps/api"]
+
+[tool.uv.sources]
+goldenloop-eval = { workspace = true }
+goldenloop-demo-agent = { workspace = true }
+goldenloop-api = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["packages/goldenloop_eval/tests", "packages/goldenloop_demo_agent/tests", "apps/api/tests", "examples/agent-tests", "tests/e2e"]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["e2e: local HTTP server and exported-bundle integration tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
