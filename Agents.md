@@ -1,6 +1,6 @@
 # GoldenLoop — Project Guide
 
-This is the concise entry point for humans and AI agents working on GoldenLoop, our InSpireD Hack for Evals project. We are moving into implementation; prioritize building and testing over documenting every discussion.
+This is the concise entry point for humans and AI agents working on GoldenLoop, our InSpireD Hack for Evals project. A local synthetic implementation exists; prioritize building and testing over documenting every discussion.
 
 ## Documentation policy
 
@@ -36,6 +36,8 @@ Use one canonical case/result schema and a shared evaluation SDK, called by both
 
 Use a Python evaluation SDK and one instrumented Microsoft Agent Framework Python demo agent. Support deterministic multi-turn scripts. Autonomous user simulation and general-purpose observability are outside the MVP.
 
+Implemented: **Project → Agent → immutable Agent Revision**. The v2 API and UI scope curation, execution, events, and exports to projects; sessions/runs pin revisions. Bootstrap migration `0002` maps existing data into Synthetic Demo without changing canonical hashes/evidence. Multiple logical agents reuse `synthetic-customer` with `goldenloop-demo-agent==0.2.0`. Non-secret live specifications use operator-approved `GOLDENLOOP_CONNECTION_BINDINGS`; judge settings remain independent global configuration, snapshotted per run/export. See the project/agent guide for v1 compatibility and upgrade rules. Shared authentication and additional adapters are not implemented.
+
 ## Working principles
 
 - Prefer Microsoft technologies where useful; avoid unnecessary services.
@@ -51,6 +53,8 @@ Use a Python evaluation SDK and one instrumented Microsoft Agent Framework Pytho
 
 ## Documentation map
 
+- [Setup and usage](README.md) — current runnable setup, secrets, testing, and limitations
+- [Projects and agents](docs/projects-and-agents.md) — delivered hierarchy, binding contract, scope, migration, and v1/v2 compatibility
 - [Challenge brief](docs/challenge-brief.md) — Evals requirements and product fit
 - [Product scope](docs/product-scope.md) — workflows, MVP, demo, and exclusions
 - [Architecture](docs/architecture.md) — React, FastAPI, SQLite, devcontainer, shared SDK, and both CI/CD paths
@@ -62,8 +66,8 @@ Use a Python evaluation SDK and one instrumented Microsoft Agent Framework Pytho
 
 ## Required configuration and verification
 
-1. Verify Microsoft Agent Framework Python dependency versions and trace hooks.
-2. Select the synthetic demo domain/tools and configure Foundry model deployments.
+1. Dependencies and observable trace integration are pinned and covered by fake-transport tests; verify actual Foundry tool calling and judge structured output separately.
+2. The demo uses read-only synthetic customer lookup. Configure project-approved agent bindings and create a new live revision; migrated revisions are mock-only in v2. Binding readiness does not test connectivity.
 3. Assign golden-case reviewers and approve judge rubrics and numeric thresholds. Required-check failures and incomplete evaluations block CI.
 4. Confirm the delivery deadline, SDK distribution, and shared hosting resources.
 
@@ -71,5 +75,6 @@ Use a Python evaluation SDK and one instrumented Microsoft Agent Framework Pytho
 
 - Remote: https://github.com/Graflinger/ms-hackathon-2026.git
 - Branch: `main`
-- Phase: transitioning into implementation; current repository contains planning documentation, not application code
-- Last updated: 2026-09-07
+- Phase: local synthetic workbench with project/agent organization and SDK 0.2.0 v2 exports implemented
+- Live Foundry deployment validation and full devcontainer rebuild verification remain outstanding
+- Last updated: 2026-09-08

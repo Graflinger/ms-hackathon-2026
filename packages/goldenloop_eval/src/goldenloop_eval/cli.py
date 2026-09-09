@@ -3,6 +3,7 @@ import asyncio
 import importlib
 import json
 import math
+import os
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable
@@ -11,7 +12,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from . import (
-    SDK_VERSION, BundleManifest, Case, Evaluation, Judge, Observation, evaluate,
+    SDK_VERSION, BundleManifest, BundleManifestV2, Case, Evaluation, Judge, Observation, evaluate,
     OpenAIJudge, release_hash, sanitize,
 )
 
@@ -35,9 +36,10 @@ def load_cases(path: str | Path) -> list[Case]:
     return cases
 
 
-def load_bundle(path: str | Path) -> tuple[BundleManifest, list[Case]]:
+def load_bundle(path: str | Path) -> tuple[BundleManifest | BundleManifestV2, list[Case]]:
     root = Path(path).resolve()
-    manifest = BundleManifest.model_validate(_read_json(root / "manifest.json"))
+    payload = _read_json(root / "manifest.json")
+    manifest = TypeAdapter(BundleManifest | BundleManifestV2).validate_python(payload)
     cases_path = (root / manifest.cases_file).resolve()
     if cases_path.parent != root:
         raise ValueError("Bundle cases must reside inside the bundle")
@@ -49,7 +51,7 @@ def load_bundle(path: str | Path) -> tuple[BundleManifest, list[Case]]:
 
 async def run_cases(
     cases: list[Case], runner: AgentRunner, *, revision: str = "fixed", mode: str = "mock",
-    judge: Judge | None = None, timeout: float = 120,
+    judge: Judge | None = None, timeout: float = 120, secrets: tuple[str, ...] = (),
 ) -> list[Evaluation]:
     """Thin exported wrappers supply an async runner; SDK never imports the demo."""
     if not cases or not math.isfinite(timeout) or timeout <= 0:
@@ -57,6 +59,11 @@ async def run_cases(
     if mode not in {"mock", "live"}:
         raise ValueError("Use supplied observations for recorded scoring")
     release_hash(cases)
+    secrets = (*secrets, *getattr(judge, "secrets", ()))
+    try:
+        cases = [Case.model_validate(sanitize(c.model_dump(mode="json"), secrets=secrets)) for c in cases]
+    except ValueError:
+        raise ValueError("Unsafe execution data") from None
     results = []
     for case in cases:
         try:
@@ -69,15 +76,15 @@ async def run_cases(
                 case_id=case.id, case_revision=case.revision, agent_revision=revision, mode=mode,
                 error=f"Agent execution failed ({type(exc).__name__})", trace_complete=False,
             )
-        results.append(evaluate(case, observation, judge=judge))
+        results.append(evaluate(case, observation, judge=judge, secrets=secrets))
     return results
 
 
-def build_report(results: list[Evaluation], **lineage) -> dict:
+def build_report(results: list[Evaluation], *, secrets: tuple[str, ...] = (), **lineage) -> dict:
     gate = ("error" if not results or any(r.gate == "error" for r in results)
             else "fail" if any(r.gate == "fail" for r in results) else "pass")
-    return sanitize({"schema_version": "1", "sdk_version": SDK_VERSION, **lineage,
-                     "gate": gate, "evaluations": [r.model_dump(mode="json") for r in results]})
+    return sanitize({"schema_version": "1", **lineage, "sdk_version": SDK_VERSION,
+                     "gate": gate, "evaluations": [r.model_dump(mode="json") for r in results]}, secrets=secrets)
 
 
 def write_junit(report: dict, path: str | Path) -> None:
@@ -119,9 +126,9 @@ def main(argv: list[str] | None = None, *, runner: AgentRunner | None = None) ->
             sub.add_argument("--mode", choices=["mock", "live", "recorded"], default="mock")
     args = parser.parse_args(argv)
     judge = None
+    secrets = ()
     try:
-        if args.judge:
-            judge = OpenAIJudge.from_azure_env()
+        manifest = None
         if args.command == "bundle":
             manifest, cases = load_bundle(args.path)
             revision, mode = manifest.agent_revision, manifest.mode
@@ -130,7 +137,23 @@ def main(argv: list[str] | None = None, *, runner: AgentRunner | None = None) ->
             cases = load_cases(args.path)
             revision, mode = args.revision, args.mode
             lineage = {"content_hash": release_hash(cases), "agent_revision": revision, "mode": mode}
-        if args.observations:
+        if isinstance(manifest, BundleManifestV2):
+            from .bundles import run_bundle
+            if args.observations or runner is not None:
+                raise ValueError("V2 bundles require the supported revision adapter, not observations or a legacy runner")
+            report = asyncio.run(run_bundle(args.path, judge_selection=args.judge or "none",
+                                            adapter=args.adapter, timeout=args.timeout))
+        else:
+            if args.judge:
+                judge = OpenAIJudge.from_azure_env()
+            secrets = tuple(s for s in (
+                *getattr(judge, "secrets", ()),
+                os.environ.get("AZURE_OPENAI_API_KEY") if mode == "live" else None,
+            ) if s)
+            report = None
+        if report is not None:
+            pass
+        elif args.observations:
             if mode != "recorded" or args.adapter:
                 raise ValueError("Recorded observations require recorded mode and no adapter")
             observations = TypeAdapter(list[Observation]).validate_python(_read_json(args.observations))
@@ -139,15 +162,17 @@ def main(argv: list[str] | None = None, *, runner: AgentRunner | None = None) ->
                 raise ValueError("Recorded observations must match the selected cases exactly")
             if any(o.mode != "recorded" or o.agent_revision != revision for o in observations):
                 raise ValueError("Recorded observation lineage mismatch")
-            results = [evaluate(c, keyed[c.id, c.revision], judge=judge) for c in cases]
+            results = [evaluate(c, keyed[c.id, c.revision], judge=judge, secrets=secrets) for c in cases]
         else:
             if args.adapter:
                 module, name = args.adapter.split(":", 1)
                 runner = getattr(importlib.import_module(module), name)
             if runner is None:
                 raise ValueError("Provide --adapter module:function or --observations")
-            results = asyncio.run(run_cases(cases, runner, revision=revision, mode=mode, timeout=args.timeout, judge=judge))
-        report = build_report(results, **lineage)
+            results = asyncio.run(run_cases(cases, runner, revision=revision, mode=mode, timeout=args.timeout,
+                                            judge=judge, secrets=secrets))
+        if report is None:
+            report = build_report(results, secrets=secrets, **lineage)
     except Exception as exc:
         report = build_report([])
         report["error"] = f"Configuration/execution failed ({type(exc).__name__})"

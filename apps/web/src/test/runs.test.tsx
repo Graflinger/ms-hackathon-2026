@@ -9,7 +9,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { api, ApiError, type RunDetail } from "../api";
+import { ApiError, type RunDetail } from "../api";
+import { api, TestProject, execution, mockRegistry, agent, revision } from "./project-fixtures";
 import Runs from "../pages/Runs";
 
 const release = {
@@ -20,9 +21,10 @@ const release = {
   case_count: 1,
 };
 const run: RunDetail = {
+  ...execution,
   id: "run-one",
   release_id: release.id,
-  agent_revision: "fixed",
+  agent_revision: revision.id,
   mode: "mock",
   status: "completed",
   gate: "pass",
@@ -46,10 +48,11 @@ function renderRuns(route = "/runs?release=release-one") {
   });
   vi.spyOn(api, "runs").mockResolvedValue([]);
   vi.spyOn(api, "releases").mockResolvedValue([release]);
+  mockRegistry();
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
-        <Runs />
+        <TestProject><Runs /></TestProject>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -65,6 +68,9 @@ describe("judge launch controls", () => {
     renderRuns();
     const user = userEvent.setup();
     await screen.findByLabelText("Golden release");
+    await user.selectOptions(screen.getByLabelText("Agent"), agent.id);
+    await screen.findByRole("option", { name: "Fixed / r2" });
+    await user.selectOptions(screen.getByLabelText("Agent revision"), revision.id);
     expect(screen.getByLabelText("Judge provider")).toHaveValue("none");
     await user.selectOptions(screen.getByLabelText("Judge provider"), "azure");
     const button = screen.getByRole("button", { name: "Start evaluation" });
@@ -81,7 +87,7 @@ describe("judge launch controls", () => {
     await waitFor(() =>
       expect(launch).toHaveBeenCalledWith(
         release.id,
-        "fixed",
+        revision.id,
         "mock",
         expect.any(String),
         "azure",
@@ -103,6 +109,9 @@ describe("judge launch controls", () => {
     renderRuns();
     const user = userEvent.setup();
     await screen.findByLabelText("Golden release");
+    await user.selectOptions(screen.getByLabelText("Agent"), agent.id);
+    await screen.findByRole("option", { name: "Fixed / r2" });
+    await user.selectOptions(screen.getByLabelText("Agent revision"), revision.id);
     await user.selectOptions(screen.getByLabelText("Execution mode"), "live");
     await user.selectOptions(screen.getByLabelText("Judge provider"), "azure");
     const button = screen.getByRole("button", { name: "Start evaluation" });
@@ -119,7 +128,7 @@ describe("judge launch controls", () => {
     await waitFor(() =>
       expect(launch).toHaveBeenCalledWith(
         release.id,
-        "fixed",
+        revision.id,
         "live",
         expect.any(String),
         "azure",
@@ -136,6 +145,9 @@ describe("judge launch controls", () => {
     renderRuns();
     const user = userEvent.setup();
     await screen.findByLabelText("Golden release");
+    await user.selectOptions(screen.getByLabelText("Agent"), agent.id);
+    await screen.findByRole("option", { name: "Fixed / r2" });
+    await user.selectOptions(screen.getByLabelText("Agent revision"), revision.id);
     expect(
       screen.getByText(/required judge checks are rejected with HTTP 409/),
     ).toBeVisible();
@@ -196,7 +208,7 @@ describe("per-case observation telemetry", () => {
             case_revision: 2,
             gate: "pass",
             checks: [],
-            agent_revision: "fixed",
+            agent_revision: revision.id,
             mode: "mock",
             // Deliberately malformed wire data exercises defensive rendering.
             observation: observation as RunDetail["results"][number]["observation"],

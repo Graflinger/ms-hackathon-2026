@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field
 
 from .models import Case, Check, JudgeVerdict, Model, Observation
 from .privacy import sanitize
+from .agents import resource_origin
 
 JUDGE_PROMPT_VERSION = "goldenloop-judge-v1"
 
@@ -26,33 +27,56 @@ class OpenAIJudge:
     Client construction/authentication is separate from scoring and persistence.
     """
 
-    def __init__(self, client: Any, *, model: str, provider: str, mode: str = "live"):
+    def __init__(self, client: Any, *, model: str, provider: str, mode: str = "live",
+                 secrets: tuple[str, ...] = ()):
         if not model or not provider or mode not in {"mock", "live"}:
             raise ValueError("Explicit judge model, provider and mode are required")
         self.client, self.model, self.provider, self.mode = client, model, provider, mode
+        self.secrets = tuple(s for s in secrets if s)
 
     @classmethod
-    def from_azure_env(cls):
+    def from_azure_env(cls, *, expected: dict | None = None):
         required = ("GOLDENLOOP_JUDGE_ENDPOINT", "GOLDENLOOP_JUDGE_DEPLOYMENT",
                     "GOLDENLOOP_JUDGE_API_VERSION", "GOLDENLOOP_JUDGE_API_KEY")
         if any(not os.environ.get(key) for key in required):
             raise ValueError("Azure judge requires " + ", ".join(required))
-        from urllib.parse import urlparse
-        endpoint = urlparse(os.environ[required[0]])
-        if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password:
-            raise ValueError("Judge endpoint must be HTTPS without embedded credentials")
+        snapshot = {"selection": "azure", "provider": "azure-openai",
+                    "endpoint": resource_origin(os.environ[required[0]]),
+                    "deployment": os.environ[required[1]], "api_version": os.environ[required[2]],
+                    "prompt_version": JUDGE_PROMPT_VERSION, "settings": {"temperature": 0}}
+        key = os.environ[required[3]]
+        if expected is not None and snapshot != expected:
+            raise ValueError("Local judge configuration differs from pinned bundle judge")
+        return cls.from_azure(endpoint=snapshot["endpoint"], deployment=snapshot["deployment"],
+                              api_version=snapshot["api_version"], api_key=key)
+
+    @classmethod
+    def from_azure(cls, *, endpoint: str, deployment: str, api_version: str, api_key: str):
+        """Construct from an explicit snapshot; never read or mutate environment settings."""
+        endpoint = resource_origin(endpoint)
+        if not deployment.strip() or not api_version.strip() or not api_key.strip():
+            raise ValueError("Azure judge requires deployment, API version and credential")
+        settings = {"endpoint": endpoint, "deployment": deployment, "api_version": api_version}
+        if sanitize(settings, secrets=(api_key,)) != settings:
+            raise ValueError("Unsafe judge configuration")
         try:
-            from openai import AzureOpenAI
+            from .azure_clients import ExplicitAzureOpenAI
+            from httpx import Client
         except ImportError:
             raise RuntimeError("Install goldenloop-eval[live] for the Azure judge") from None
-        client = AzureOpenAI(azure_endpoint=os.environ[required[0]], api_version=os.environ[required[2]],
-                             api_key=os.environ[required[3]], timeout=60, max_retries=0)
-        return cls(client, model=os.environ[required[1]], provider="azure-openai")
+        http_client = Client(follow_redirects=False, timeout=60)
+        try:
+            client = ExplicitAzureOpenAI(azure_endpoint=endpoint, api_version=api_version,
+                                 api_key=api_key, timeout=60, max_retries=0, http_client=http_client)
+        except BaseException:
+            http_client.close()
+            raise
+        return cls(client, model=deployment, provider="azure-openai", secrets=(api_key,))
 
     def __call__(self, case: Case, observation: Observation, check: Check) -> JudgeVerdict:
         payload = sanitize({"case": case.model_dump(mode="json"),
                             "observation": observation.model_dump(mode="json"),
-                            "check": check.model_dump(mode="json")})
+                            "check": check.model_dump(mode="json")}, secrets=self.secrets)
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -78,6 +102,6 @@ class OpenAIJudge:
         if message.refusal or not message.content:
             raise ValueError("Judge refused or omitted structured output")
         score = _Score.model_validate_json(message.content)
-        return JudgeVerdict(**score.model_dump(), provider=self.provider, model=self.model,
-                            prompt_version=JUDGE_PROMPT_VERSION, mode=self.mode,
-                            settings={"temperature": 0, "response_model": response.model})
+        return JudgeVerdict.model_validate(sanitize({**score.model_dump(), "provider": self.provider,
+            "model": self.model, "prompt_version": JUDGE_PROMPT_VERSION, "mode": self.mode,
+            "settings": {"temperature": 0, "response_model": response.model}}, secrets=self.secrets))

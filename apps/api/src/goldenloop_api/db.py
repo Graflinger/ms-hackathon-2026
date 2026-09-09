@@ -4,10 +4,23 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, ForeignKey, ForeignKeyConstraint, Integer, String, UniqueConstraint, event, text
+from anyio import CancelScope
+from fastapi import HTTPException
+from sqlalchemy import (
+    JSON,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    UniqueConstraint,
+    event,
+    func,
+    select,
+    text,
+)
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .config import Settings, clean
 
@@ -24,7 +37,61 @@ class Base(DeclarativeBase):
     pass
 
 
-class CaseHead(Base):
+DEMO_PROJECT = "synthetic-demo"
+DEMO_AGENT = "synthetic-customer-lookup"
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[str] = mapped_column(String, default="")
+    archived: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+
+
+class Agent(Base):
+    __tablename__ = "agents"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[str] = mapped_column(String, default="")
+    archived: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+
+
+class AgentRevision(Base):
+    __tablename__ = "agent_revisions"
+    __table_args__ = (UniqueConstraint("agent_id", "number"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String)
+    spec: Mapped[dict] = mapped_column(JSON)
+    spec_hash: Mapped[str] = mapped_column(String)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+    legacy: Mapped[bool] = mapped_column(default=False)
+    agent: Mapped[Agent] = relationship(lazy="joined")
+
+    @property
+    def spec_provenance(self):
+        return "mapping_only" if self.legacy else "registered"
+
+
+class ProjectOwned:
+    # Nullable in SQLite for additive migration; triggers enforce required ownership.
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id"), default=DEMO_PROJECT, nullable=True, index=True
+    )
+
+
+class ExecutionOwned(ProjectOwned):
+    agent_revision_id: Mapped[str | None] = mapped_column(ForeignKey("agent_revisions.id"), nullable=True)
+    legacy_workflow: Mapped[bool] = mapped_column(default=True, server_default="1")
+
+
+class CaseHead(ProjectOwned, Base):
     __tablename__ = "cases"
     id: Mapped[str] = mapped_column(String, primary_key=True)
     latest: Mapped[int] = mapped_column(Integer)
@@ -41,14 +108,14 @@ class CaseRevision(Base):
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
-class Import(Base):
+class Import(ProjectOwned, Base):
     __tablename__ = "imports"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     payload: Mapped[dict] = mapped_column(JSON)
     committed: Mapped[bool] = mapped_column(default=False)
 
 
-class Release(Base):
+class Release(ProjectOwned, Base):
     __tablename__ = "dataset_releases"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String)
@@ -68,7 +135,7 @@ class ReleaseCase(Base):
     payload: Mapped[dict] = mapped_column(JSON)
 
 
-class ChatSession(Base):
+class ChatSession(ExecutionOwned, Base):
     __tablename__ = "chat_sessions"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     title: Mapped[str] = mapped_column(String)
@@ -79,6 +146,7 @@ class ChatSession(Base):
     tool_calls: Mapped[list] = mapped_column(JSON, default=list)
     trace_complete: Mapped[bool] = mapped_column(default=False)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
+    pinned_revision: Mapped[AgentRevision | None] = relationship(lazy="joined")
 
 
 class MessageCommand(Base):
@@ -101,19 +169,21 @@ class Feedback(Base):
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
-class Run(Base):
+class Run(ExecutionOwned, Base):
     __tablename__ = "evaluation_runs"
+    __table_args__ = (UniqueConstraint("project_id", "idempotency_key", name="uq_run_project_key"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     release_id: Mapped[str] = mapped_column(ForeignKey("dataset_releases.id"), index=True)
     agent_revision: Mapped[str] = mapped_column(String)
     mode: Mapped[str] = mapped_column(String)
-    idempotency_key: Mapped[str] = mapped_column(String, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="queued", index=True)
     gate: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[str] = mapped_column(String, default=now)
     results: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     lineage: Mapped[dict] = mapped_column(JSON)
+    pinned_revision: Mapped[AgentRevision | None] = relationship(lazy="joined")
 
 
 class Event(Base):
@@ -139,12 +209,56 @@ def journal_mode() -> str:
     return "WAL" if sqlite3.sqlite_version_info >= (3, 51, 3) else "DELETE"
 
 
+async def require_active_project(session, project_id):
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    if project.archived:
+        raise HTTPException(409, "Project is archived")
+
+
+async def pending_count(session, model):
+    # Core table columns deliberately bypass request ORM filters. Capacity is shared.
+    table = model.__table__
+    return await session.scalar(
+        select(func.count()).select_from(table).where(table.c.status.in_(["queued", "running"]))
+    )
+
+
 class Database:
     def __init__(self, settings: Settings):
         self.engine = create_async_engine("sqlite+aiosqlite:///" + settings.db_path.as_posix())
         event.listen(self.engine.sync_engine, "connect", configure_sqlite)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         self.lock = asyncio.Lock()
+
+    async def read(self, operation):
+        """Finish the entire short read and close its session before propagating cancellation.
+
+        Cancelling aiosqlite between execute and cursor.close can strand a SQLite reader.
+        Shielding only AsyncSession.close is too late. Never yield a stream from operation.
+        """
+
+        async def transaction():
+            async with self.sessions() as session:
+                return await operation(session)
+
+        task = asyncio.create_task(transaction())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Starlette/AnyIO may repeatedly cancel the streaming task on disconnect.
+            with CancelScope(shield=True):
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:  # noqa: BLE001 - retrieve failures but preserve caller cancellation
+                        break
+                if not task.cancelled():
+                    task.exception()
+            raise
 
     @asynccontextmanager
     async def write(self):
@@ -158,4 +272,10 @@ class Database:
                     if "locked" not in str(exc).lower() or attempt == 2:
                         raise
                     await asyncio.sleep(0.05 * (attempt + 1))
+            # Recheck after acquiring the writer reservation, not just at request entry.
+            from .scope import current_scope
+
+            scope = current_scope.get()
+            if scope and scope.writing:
+                await require_active_project(session, scope.project_id)
             yield session

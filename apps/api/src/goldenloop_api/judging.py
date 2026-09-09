@@ -3,6 +3,7 @@ import importlib.util
 import os
 import threading
 import time
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
@@ -11,7 +12,15 @@ from goldenloop_eval import JUDGE_PROMPT_VERSION, Case, Check, Observation, Open
 from .config import clean
 
 
-def judge_lineage(settings, cases: list[Case], selection: str) -> dict:
+@dataclass(frozen=True, repr=False)
+class JudgeSnapshot:
+    endpoint: str
+    deployment: str
+    api_version: str
+    api_key: str
+
+
+def judge_lineage(settings, cases: list[Case], selection: str, *, execution: bool = True) -> dict:
     checks = [
         {
             "case_id": case.id,
@@ -37,7 +46,9 @@ def judge_lineage(settings, cases: list[Case], selection: str) -> dict:
         "GOLDENLOOP_JUDGE_API_VERSION",
         "GOLDENLOOP_JUDGE_API_KEY",
     )
-    if not settings.allow_live_judge or any(not os.getenv(key) for key in keys):
+    if (execution and not settings.allow_live_judge) or any(
+        not os.getenv(key) for key in (keys if execution else keys[:3])
+    ):
         raise HTTPException(
             409,
             "Azure judging requires GOLDENLOOP_ALLOW_LIVE_SYNTHETIC_JUDGE=true and GOLDENLOOP_JUDGE_* configuration",
@@ -54,7 +65,7 @@ def judge_lineage(settings, cases: list[Case], selection: str) -> dict:
         )
     except ValueError:
         valid = False
-    if not valid or importlib.util.find_spec("openai") is None:
+    if not valid or (execution and importlib.util.find_spec("openai") is None):
         raise HTTPException(
             409, "Azure judging requires a credential-free HTTPS endpoint and goldenloop-eval[live]"
         )
@@ -83,14 +94,19 @@ def judge_lineage(settings, cases: list[Case], selection: str) -> dict:
     return safe
 
 
-async def evaluate_with_judge(case, observation, lineage, deadline):
+async def evaluate_with_judge(case, observation, lineage, deadline, snapshot: JudgeSnapshot):
     """Keep the synchronous SDK client in its worker, including cleanup after cancellation."""
     stopped = threading.Event()
 
     def score():
         if stopped.is_set() or time.monotonic() >= deadline:
             raise TimeoutError("Judge run deadline exceeded")
-        judge = OpenAIJudge.from_azure_env()
+        judge = OpenAIJudge.from_azure(
+            endpoint=snapshot.endpoint,
+            deployment=snapshot.deployment,
+            api_version=snapshot.api_version,
+            api_key=snapshot.api_key,
+        )
         try:
             if judge.model != lineage["model"] or judge.provider != lineage["provider"]:
                 raise ValueError("Judge lineage mismatch")

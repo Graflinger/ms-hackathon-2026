@@ -2,6 +2,12 @@
 
 This document defines the canonical dataset model and review workflow. Publication requires approved case revisions.
 
+## Project ownership
+
+The delivered [project/agent model](projects-and-agents.md) scopes imports, cases, and releases to projects, not individual agents. Feedback inherits its observed session/revision and creates a candidate in that project. A common release can evaluate multiple compatible agents; incompatible selections are rejected, not silently reduced. Scope covers indirect feedback, release, result, and event lookups as well as lists.
+
+Ownership is relational/API metadata, not a canonical `Case` field. Migration `0002` leaves canonical payloads, release hashes, and historical observations unchanged. Case IDs deliberately remain globally unique; exact context/turn duplicate detection is project-local. Use import policy `new` for repeated spreadsheet IDs across projects, preserving supplied IDs in provenance. There is no project-local external-ID namespace, cross-project move, or shared release.
+
 ## One canonical representation
 
 Spreadsheets are an input convenience; versioned structured cases are the internal and exported source of truth.
@@ -22,7 +28,7 @@ Simple template: `case_id` (optional), `question`, `reference_answer`, `scenario
 
 For multi-turn input add `scenario_id` and `turn_index`; each row supplies a scripted user turn and optional expected answer. Validate grouping and ordering. Add tool expectations in the UI; spreadsheet import of nested tool expectations is outside the MVP.
 
-Provide column mapping, preview, row errors, blank/duplicate handling, encoding checks, source file/sheet/row metadata, and deliberate merge-versus-new-case selection. Do not execute formulas or macros; flag formula cells that cannot be reliably read. Escape spreadsheet formula injection when exporting human-readable CSV.
+The importer provides mapping, preview, row errors, blank/duplicate handling, encoding checks, and source file/sheet/row metadata. Policies are `reject` or `new`, not merge/update-existing. Imports are atomic; correct errors in the source and preview again. Formula-like CSV values and XLSX formulas/macros/external links are rejected, not executed. Sanitized parsed previews are persisted; raw uploads are not retained. Current exports are JSON-based ZIP bundles, not human-readable CSV.
 
 ## Feedback to test conversion
 
@@ -38,7 +44,7 @@ Feedback can target an answer, a specific observed call, or a missing call at a 
 
 Example: observed `lookup_customer({"customer_id":"C-999"})`; reviewer verifies the scenario requires `C-123`. Preserve the observed call and add a separate expected assertion on `customer_id`. Do not replace trace history or use the bad answer as the reference answer.
 
-A reviewer can accept a correction, reject feedback, or leave it unresolved. Detect repeated cases for review rather than silently duplicating them. Keep reviewer attribution and edit reasons.
+A reviewer can accept or reject feedback or leave it unresolved. Accepting a signal and converting it to a candidate does not approve its expectations. The candidate retains user-turn context and provenance; a reviewer authors actionable checks before approval. Semantic duplicate detection is not implemented. Attribution currently uses the fixed local identity, not separate authenticated reviewers.
 
 ## Expressing tool expectations
 
@@ -47,7 +53,7 @@ Match tool expectations using semantic constraints, not exact trace snapshots:
 - Required/forbidden tool name, turn scope, occurrence bounds
 - Argument-path checks: exact, subset, type/schema, range, or explicit predicate from the supported declarative set
 - Allowed alternatives and order constraints only where order matters
-- Expected treatment of tool failures and returned content
+- Assert expected answer treatment of returned content using content/judge checks; observed tool errors remain execution evidence, not a separate general-purpose result-check language
 
 Execution span IDs anchor feedback, but future runs match expectations by turn/tool constraints, not old span IDs. Live timestamps, generated IDs, and nonessential argument fields should not make tests brittle. Define matching for repeated/parallel calls explicitly.
 
@@ -59,6 +65,8 @@ Start with scripted user turns. Autonomous user simulation is a separate later f
 
 ## Changes and publication
 
-Editing an approved case creates a new revision; editing a dataset creates a new release. Past runs and exported bundles retain their pinned references. CI upgrades are explicit, reviewed changes, not silent synchronization to the latest dataset.
+Every case edit creates a new revision, including edits to unapproved candidates. `expected_revision` rejects stale writes. Approval requires at least one valid required check; publication pins an explicit map of the latest approved revisions and rejects stale selections. Named immutable releases are implemented; a separate dataset-grouping entity is not. Past runs/bundles retain their pins, with explicit CI upgrades rather than latest-dataset synchronization.
 
-Separate development cases from a held-out set for credible improvement claims. Export only authorized sanitized material; keep provenance and access rules. Required privacy deletion may override retention, leaving non-sensitive audit metadata where permitted.
+V2 test-bundle export selects an agent revision, mode, and judge and embeds their non-secret execution pins separately from unchanged canonical cases. It is not dataset-only download. Archived project/agent history and explicit exports remain readable. Legacy historical execution specs stay unavailable (`spec_hash=null`); the migrated agent mappings are `mapping_only`, not reconstructed evidence. SDK 0.2.0 retains v1 bundle support.
+
+Held-out-set enforcement, real-data authorization, and privacy deletion/retention tooling remain gaps. Separate development and held-out material operationally before making credible improvement claims. Export only authorized sanitized material; current redaction is best-effort, not comprehensive DLP.

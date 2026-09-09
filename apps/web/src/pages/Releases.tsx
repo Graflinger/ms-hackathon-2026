@@ -1,8 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import {
+  useProjectApi,
+  useProject,
+  useDirty,
+  useProjectSearchParams as useSearchParams,
+} from "../project";
+import { AgentSelector } from "../agent-selector";
 import { Download, LockKeyhole, Plus } from "lucide-react";
-import { api, ApiError } from "../api";
+import { ApiError, type Revision, type Mode, type Judge } from "../api";
 import {
   DateLabel,
   EmptyState,
@@ -17,8 +23,25 @@ import {
 } from "../components";
 
 function ReleaseInspector({ releaseId }: { releaseId: string }) {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
+  const [revision, setRevision] = useState<Revision | null>(null);
+  const [mode, setMode] = useState<Mode | "">("");
+  const [judge, setJudge] = useState<Judge>("none");
+  const download = useMutation({
+    mutationFn: () =>
+      api.exportBundle(releaseId, revision!.id, mode as Mode, judge),
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "goldenloop-release.zip";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+  });
   const release = useQuery({
-    queryKey: ["release", releaseId],
+    queryKey: api.key("release", releaseId),
     queryFn: ({ signal }) => api.release(releaseId, signal),
   });
   if (release.isPending)
@@ -30,14 +53,86 @@ function ReleaseInspector({ releaseId }: { releaseId: string }) {
       <SectionHeading
         title={release.data.name}
         detail="Immutable golden dataset snapshot"
-        action={
-          <a className="button" href={api.exportUrl(releaseId)} download>
-            <Download size={16} />
-            Export test bundle
-          </a>
-        }
       />
       <div className="detail-body">
+        <form
+          className="form-stack export-config"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (
+              revision &&
+              mode &&
+              revision.spec.modes?.includes(mode) &&
+              !download.isPending
+            )
+              download.mutate();
+          }}
+        >
+          <h3>Configure an executable test bundle</h3>
+          <p>
+            Explicitly choose a pinned agent revision and execution mode.
+            Dataset-only download is not available. Archived revisions can still
+            be exported.
+          </p>
+          <AgentSelector
+            value={revision}
+            purpose="export"
+            disabled={download.isPending}
+            onChange={(value) => {
+              setRevision(value);
+              setMode("");
+              download.reset();
+            }}
+          />
+          <label>
+            Export execution mode
+            <select
+              required
+              value={mode}
+              disabled={!revision || download.isPending}
+              onChange={(e) => setMode(e.target.value as Mode)}
+            >
+              <option value="">Select execution mode</option>
+              {revision?.spec.modes?.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Export judge provider
+            <select
+              value={judge}
+              disabled={download.isPending}
+              onChange={(e) => setJudge(e.target.value as Judge)}
+            >
+              <option value="none">None / no judge provider</option>
+              <option value="azure">
+                Azure / requires server judge configuration
+              </option>
+            </select>
+          </label>
+          {(mode === "live" || judge === "azure") && (
+            <Notice tone="warning">
+              Export does not call a model. Running this bundle may incur usage
+              costs. CI must supply its own credentials for the pinned
+              connection and judge; no secrets are exported. Azure judge
+              selection requires configured server metadata.
+            </Notice>
+          )}
+          <button
+            className="button align-start"
+            disabled={!revision || !mode || download.isPending}
+          >
+            <Download size={16} />
+            {download.isPending ? "Preparing bundle..." : "Export test bundle"}
+          </button>
+          {download.error && <ErrorState error={download.error} />}
+          {download.isSuccess && (
+            <Notice tone="success">Configured test bundle downloaded.</Notice>
+          )}
+        </form>
         <div className="release-meta">
           <div>
             <span className="small-label">RELEASE ID</span>
@@ -80,15 +175,19 @@ function ReleaseInspector({ releaseId }: { releaseId: string }) {
             The API returned no case content for this release.
           </EmptyState>
         )}
-        <TextLink to={`/runs?release=${releaseId}`}>
-          Evaluate this release
-        </TextLink>
+        {!writeBlocked && (
+          <TextLink to={`/runs?release=${releaseId}`}>
+            Evaluate this release
+          </TextLink>
+        )}
       </div>
     </section>
   );
 }
 
 export default function Releases() {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const selected = params.get("release");
@@ -101,11 +200,11 @@ export default function Releases() {
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
   const releases = useQuery({
-    queryKey: ["releases"],
+    queryKey: api.key("releases"),
     queryFn: ({ signal }) => api.releases(signal),
   });
   const cases = useQuery({
-    queryKey: ["cases"],
+    queryKey: api.key("cases"),
     queryFn: ({ signal }) => api.cases(signal),
     enabled: creating,
   });
@@ -131,15 +230,16 @@ export default function Releases() {
         setExpectedRevisions({});
         setConfirmed(false);
         await Promise.all([
-          client.invalidateQueries({ queryKey: ["cases"] }),
-          client.invalidateQueries({ queryKey: ["case"] }),
-          client.invalidateQueries({ queryKey: ["releases"] }),
+          client.invalidateQueries({ queryKey: api.key("cases") }),
+          client.invalidateQueries({ queryKey: api.key("case") }),
+          client.invalidateQueries({ queryKey: api.key("releases") }),
         ]);
       }
     },
     onSuccess: (release) => {
-      client.invalidateQueries({ queryKey: ["releases"] });
-      client.invalidateQueries({ queryKey: ["summary"] });
+      client.invalidateQueries({ queryKey: api.key("releases") });
+      client.invalidateQueries({ queryKey: api.key("summary") });
+      clearDirty();
       setParams({ release: release.id });
       setCreating(false);
       setName("");
@@ -151,6 +251,9 @@ export default function Releases() {
       );
     },
   });
+  const clearDirty = useDirty(
+    creating && (!!name || selectedIds.length > 0 || confirmed),
+  );
   return (
     <>
       <PageHeader
@@ -160,6 +263,7 @@ export default function Releases() {
         action={
           <button
             className="button"
+            disabled={writeBlocked}
             onClick={() => setCreating((value) => !value)}
           >
             <Plus size={16} />
@@ -179,6 +283,7 @@ export default function Releases() {
             onSubmit={(event) => {
               event.preventDefault();
               if (
+                writeBlocked ||
                 !confirmed ||
                 !selectedIds.length ||
                 staleIds.length ||
@@ -312,6 +417,7 @@ export default function Releases() {
                 type="checkbox"
                 required
                 disabled={
+                  writeBlocked ||
                   create.isPending ||
                   !!staleIds.length ||
                   cases.isFetching ||
@@ -409,14 +515,13 @@ export default function Releases() {
                           Inspect
                           <span className="sr-only"> {release.name}</span>
                         </button>
-                        <a
+                        <button
                           className="icon-button"
-                          href={api.exportUrl(release.id)}
-                          download
-                          aria-label={`Export ${release.name}`}
+                          onClick={() => setParams({ release: release.id })}
+                          aria-label={`Configure export for ${release.name}`}
                         >
                           <Download size={17} />
-                        </a>
+                        </button>
                       </div>
                     </td>
                   </tr>

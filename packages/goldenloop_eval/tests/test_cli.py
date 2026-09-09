@@ -126,3 +126,29 @@ def test_junit_error_fail_and_xml_controls(tmp_path):
     root = ET.parse(tmp_path / "failure.xml").getroot()
     assert root.attrib["failures"] == "1"
     assert root.find("testcase/failure") is not None
+
+
+def test_legacy_cli_uses_judge_secret_snapshot_for_execution_and_reports(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from goldenloop_eval import OpenAIJudge
+    key = "opaque-legacy-judge-value"
+    case = bundle(tmp_path, sdk_version="0.1.0")
+    case.context = key
+    case.checks[0].config["value"] = key
+    (tmp_path / "cases.json").write_text(json.dumps([case.model_dump()]))
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest["content_hash"] = release_hash([case])
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    judge = SimpleNamespace(secrets=(key,), client=SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(OpenAIJudge, "from_azure_env", lambda: judge)
+    inputs = []
+    async def invoke(case, revision, mode):
+        inputs.append(case.model_dump_json())
+        obs = await runner(case, revision, mode)
+        obs.messages[0]["content"] = key
+        return obs
+    assert main(["bundle", str(tmp_path), "--judge", "azure", "--json", str(tmp_path / "report.json"),
+                 "--junit", str(tmp_path / "report.xml")], runner=invoke) == 0
+    outputs = [capsys.readouterr().out, (tmp_path / "report.json").read_text(),
+               (tmp_path / "report.xml").read_text(), *inputs]
+    assert all(key not in value for value in outputs)

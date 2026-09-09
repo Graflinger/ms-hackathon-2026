@@ -2,6 +2,7 @@
 import asyncio
 import builtins
 import json
+import os
 
 import pytest
 
@@ -98,3 +99,112 @@ def test_insecure_endpoint_rejected(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "http://localhost")
     with pytest.raises(ValueError, match="HTTPS"):
         asyncio.run(run_case(Case(title="test", turns=[{"user": "hello"}]), mode="live"))
+
+
+def test_concurrent_explicit_live_transports_and_instructions(monkeypatch):
+    import httpx
+    from goldenloop_demo_agent import run_revision
+    from goldenloop_eval import AgentConnection, AgentSpec
+
+    settings(monkeypatch)
+    monkeypatch.setenv("AZURE_OPENAI_AD_TOKEN", "legacy-bearer-must-not-be-used")
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Other-Service-Key: private-project-a-secret\napi-key: wrong-key\nAuthorization: Bearer wrong-auth")
+    monkeypatch.setenv("OPENAI_ORG_ID", "private-org")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "private-project")
+    before = dict(os.environ)
+    requests, clients = [], []
+    real_client = httpx.AsyncClient
+
+    async def respond(request):
+        await asyncio.sleep(0.01)
+        requests.append(request)
+        return httpx.Response(200, json={
+            "id": "response", "object": "chat.completion", "created": 0, "model": "observed-model",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": "Generated synthetic answer",
+            }}],
+        })
+
+    class Client(real_client):
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False
+            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
+            clients.append(self)
+
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    async def run():
+        tasks = []
+        for team in ("one", "two"):
+            spec = AgentSpec(variant="fixed", modes=["live"], instructions=f"Instructions for {team}",
+                             connection=AgentConnection(endpoint=f"https://{team}.openai.azure.com",
+                                 deployment=f"model-{team}", api_version=f"version-{team}", auth="api_key", binding=team))
+            tasks.append(run_revision(Case(title=team, turns=[{"user": "hello"}]), f"revision-{team}",
+                                      spec, "live", api_key=f"credential-{team}"))
+        return await asyncio.gather(*tasks)
+
+    observations = asyncio.run(run())
+    assert all(o.error is None for o in observations), observations
+    assert len(requests) == 2
+    for request in requests:
+        team = request.url.host.split(".")[0]
+        other = "two" if team == "one" else "one"
+        assert request.headers["api-key"] == f"credential-{team}"
+        assert "authorization" not in request.headers
+        assert "x-other-service-key" not in request.headers
+        assert "openai-organization" not in request.headers
+        assert "openai-project" not in request.headers
+        assert f"/deployments/model-{team}/" in request.url.path
+        assert request.url.params["api-version"] == f"version-{team}"
+        assert f"Instructions for {team}" in request.content.decode()
+        assert f"Instructions for {other}" not in request.content.decode()
+    assert all(c.is_closed for c in clients)
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("auth", ["api_key", "azure_cli"])
+def test_live_never_follows_credential_redirects(monkeypatch, auth):
+    import httpx
+    import azure.identity
+    from goldenloop_demo_agent import run_revision
+    from goldenloop_eval import AgentConnection, AgentSpec
+
+    requests, clients, credentials = [], [], []
+    real_client = httpx.AsyncClient
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(307, headers={"location": "https://unapproved.test/steal"})
+    class Client(real_client):
+        def __init__(self, **kwargs):
+            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
+            clients.append(self)
+    class Credential:
+        closed = False
+        def __init__(self):
+            credentials.append(self)
+        def close(self):
+            self.closed = True
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    monkeypatch.setattr(azure.identity, "AzureCliCredential", Credential)
+    monkeypatch.setattr(azure.identity, "get_bearer_token_provider", lambda credential, scope: lambda: "unit-token")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "wrong-global-key")
+    monkeypatch.setenv("AZURE_OPENAI_AD_TOKEN", "wrong-global-token")
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Other-Service-Key: private-project-a-secret\nAuthorization: Bearer wrong-auth")
+    monkeypatch.setenv("OPENAI_ORG_ID", "private-org")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "private-project")
+    spec = AgentSpec(variant="fixed", modes=["live"], connection=AgentConnection(
+        endpoint="https://approved.test", deployment="unit", api_version="unit", auth=auth, binding="team"))
+    obs = asyncio.run(run_revision(Case(title="redirect", turns=[{"user": "hello"}]), "revision", spec,
+                                   "live", api_key="unit-key" if auth == "api_key" else None))
+    assert obs.error is not None
+    assert len(requests) == 1
+    assert requests[0].url.host == "approved.test"
+    assert "x-other-service-key" not in requests[0].headers
+    assert "openai-organization" not in requests[0].headers
+    assert "openai-project" not in requests[0].headers
+    if auth == "api_key":
+        assert requests[0].headers["api-key"] == "unit-key"
+    else:
+        assert requests[0].headers["authorization"] == "Bearer unit-token"
+        assert "api-key" not in requests[0].headers
+    assert all(c.is_closed for c in clients)
+    assert all(c.closed for c in credentials)

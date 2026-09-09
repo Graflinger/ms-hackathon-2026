@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Upload } from "lucide-react";
-import { Link } from "react-router-dom";
-import { api, isActiveRun } from "../api";
+import { ProjectLink as Link, useProjectApi } from "../project";
+import { isActiveRun } from "../api";
 import {
   DateLabel,
   EmptyState,
@@ -15,18 +15,19 @@ import {
 } from "../components";
 
 export default function Overview() {
+  const api = useProjectApi();
   const summary = useQuery({
-    queryKey: ["summary"],
+    queryKey: api.key("summary"),
     queryFn: ({ signal }) => api.summary(signal),
   });
   const runs = useQuery({
-    queryKey: ["runs"],
+    queryKey: api.key("runs"),
     queryFn: ({ signal }) => api.runs(signal),
     refetchInterval: (query) =>
       query.state.data?.some(isActiveRun) ? 2500 : false,
   });
   const cases = useQuery({
-    queryKey: ["cases"],
+    queryKey: api.key("cases"),
     queryFn: ({ signal }) => api.cases(signal),
   });
   return (
@@ -158,7 +159,7 @@ export default function Overview() {
                         </div>
                       </td>
                       <td>
-                        <Status value={run.agent_revision} />
+                        {run.agent_name} / {run.agent_revision_label}
                       </td>
                       <td>{run.mode}</td>
                       <td>

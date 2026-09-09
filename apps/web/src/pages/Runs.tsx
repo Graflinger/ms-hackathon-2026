@@ -1,11 +1,16 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import {
+  useProjectApi,
+  useProject,
+  useDirty,
+  useProjectSearchParams as useSearchParams,
+} from "../project";
+import { AgentSelector, ExecutionIdentity } from "../agent-selector";
 import { GitCompareArrows, Play, Square } from "lucide-react";
 import {
-  api,
   isActiveRun,
-  type AgentRevision,
+  type Revision,
   type CaseResult,
   type Mode,
   type Judge,
@@ -28,7 +33,10 @@ import {
 
 export function comparableRuns(runs: Run[], selected: Run): Run[] {
   return runs.filter(
-    (run) => run.id !== selected.id && run.release_id === selected.release_id,
+    (run) =>
+      run.id !== selected.id &&
+      run.project_id === selected.project_id &&
+      run.release_id === selected.release_id,
   );
 }
 
@@ -157,7 +165,7 @@ function RunSignals({ run }: { run: RunDetail }) {
         <div>
           <span className="small-label">AGENT / MODE</span>
           <strong>
-            {run.agent_revision} / {run.mode}
+            {run.agent_name} / {run.agent_revision_label} / {run.mode}
           </strong>
         </div>
         <div>
@@ -165,6 +173,7 @@ function RunSignals({ run }: { run: RunDetail }) {
           <span className="muted">Not reported at run level</span>
         </div>
       </div>
+      <ExecutionIdentity value={run} />
       {run.error != null && (
         <div className="run-error">
           <h3>Execution / evaluation error</h3>
@@ -195,8 +204,9 @@ function Comparison({
   first: RunDetail;
   secondId: string;
 }) {
+  const api = useProjectApi();
   const second = useQuery({
-    queryKey: ["run", secondId],
+    queryKey: api.key("run", secondId),
     queryFn: ({ signal }) => api.run(secondId, signal),
     refetchInterval: (query) =>
       query.state.data && isActiveRun(query.state.data) ? 2000 : false,
@@ -204,13 +214,31 @@ function Comparison({
   if (second.isPending) return <Loading label="Loading comparison run..." />;
   if (second.isError)
     return <ErrorState error={second.error} retry={() => second.refetch()} />;
-  if (first.release_id !== second.data.release_id)
+  if (
+    first.project_id !== second.data.project_id ||
+    first.release_id !== second.data.release_id
+  )
     return (
       <Notice tone="warning">
         Comparison blocked: both runs must use the same immutable release.
       </Notice>
     );
   const other = second.data;
+  const settings = (run: RunDetail) => {
+    const lineage = run.lineage ?? {};
+    return {
+      mode: run.mode,
+      fixture: lineage.fixture_version ?? "Not reported",
+      sdk: lineage.sdk_version ?? "Not reported",
+      agent_spec:
+        lineage.agent_spec ?? "Unavailable for this historical execution",
+      judge: lineage.judge ?? "Not reported",
+      provider_version:
+        lineage.provider_version ??
+        lineage.model_version ??
+        "Not reported; deployment names do not freeze provider versions",
+    };
+  };
   const keys = [
     ...new Set(
       [...(first.results ?? []), ...(other.results ?? [])].map(
@@ -231,8 +259,10 @@ function Comparison({
               {run.id === first.id ? "SELECTED RUN" : "COMPARISON RUN"}
             </span>
             <h3>
-              {run.agent_revision} <span className="muted">/ {run.mode}</span>
+              {run.agent_name} / {run.agent_revision_label}{" "}
+              <span className="muted">/ {run.mode}</span>
             </h3>
+            <ExecutionIdentity value={run} />
             <ShortId value={run.id} />
             <div className="inline-meta">
               <Status value={run.status} />
@@ -241,16 +271,37 @@ function Comparison({
           </div>
         ))}
       </div>
+      <details className="help-details" open>
+        <summary>Execution and evaluator configuration</summary>
+        <div className="comparison-head">
+          <div>
+            <h3>Selected run configuration</h3>
+            <JsonView value={settings(first)} />
+          </div>
+          <div>
+            <h3>Comparison run configuration</h3>
+            <JsonView value={settings(other)} />
+          </div>
+        </div>
+      </details>
       {first.mode !== other.mode && (
         <Notice tone="warning">
           These runs use different modes. Differences cannot be attributed
           solely to the agent revision.
         </Notice>
       )}
+      {JSON.stringify(settings(first)) !== JSON.stringify(settings(other)) && (
+        <Notice tone="warning">
+          Execution or evaluator configuration differs. Compare fixture,
+          artifact, instructions, provider/model evidence and judge snapshots
+          below; do not attribute all changes solely to agent behavior. Missing
+          provider version evidence remains unknown.
+        </Notice>
+      )}
       {first.agent_revision === other.agent_revision && (
         <Notice>
-          Both runs use the same agent revision. Select the opposite revision to
-          compare fixed vs buggy behavior.
+          Both runs use the same agent revision. Inspect execution and evaluator
+          settings before attributing differences.
         </Notice>
       )}
       {!keys.length ? (
@@ -355,11 +406,12 @@ function Comparison({
 }
 
 function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
+  const api = useProjectApi();
   const client = useQueryClient();
   const [compareId, setCompareId] = useState("");
   const [cancelConfirmed, setCancelConfirmed] = useState(false);
   const detail = useQuery({
-    queryKey: ["run", runId],
+    queryKey: api.key("run", runId),
     queryFn: ({ signal }) => api.run(runId, signal),
     refetchInterval: (query) =>
       query.state.data && isActiveRun(query.state.data) ? 2000 : false,
@@ -367,8 +419,8 @@ function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(runId),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["run", runId] });
-      client.invalidateQueries({ queryKey: ["runs"] });
+      client.invalidateQueries({ queryKey: api.key("run", runId) });
+      client.invalidateQueries({ queryKey: api.key("runs") });
       setCancelConfirmed(false);
     },
   });
@@ -448,8 +500,8 @@ function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
               <option value="">Select a comparison run</option>
               {options.map((other) => (
                 <option key={other.id} value={other.id}>
-                  {other.agent_revision} / {other.mode} / {other.status} /{" "}
-                  {other.id.slice(0, 8)}
+                  {other.agent_name} / {other.agent_revision_label} /{" "}
+                  {other.mode} / {other.status} / {other.id.slice(0, 8)}
                 </option>
               ))}
             </select>
@@ -457,8 +509,8 @@ function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
         </div>
         {!options.length && (
           <p className="field-hint">
-            Run the other agent revision against this same release to compare
-            fixed vs buggy.
+            Run another registered agent revision against this same release to
+            compare behavior.
           </p>
         )}
         {compareId ? (
@@ -493,30 +545,37 @@ function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
 }
 
 export default function Runs() {
+  const api = useProjectApi();
+  const { project, writeBlocked } = useProject();
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const selected = params.get("run");
   const [releaseId, setReleaseId] = useState(params.get("release") || "");
-  const [revision, setRevision] = useState<AgentRevision>("fixed");
+  const [revision, setRevision] = useState<Revision | null>(null);
   const [mode, setMode] = useState<Mode>("mock");
   const [liveConfirmed, setLiveConfirmed] = useState(false);
   const [judge, setJudge] = useState<Judge>("none");
   const [judgeConfirmed, setJudgeConfirmed] = useState(false);
   const [showLaunch, setShowLaunch] = useState(!!params.get("release"));
+  const clearDirty = useDirty(
+    showLaunch && (!!revision || liveConfirmed || judgeConfirmed),
+  );
   // Keep the key for an identical retry after an ambiguous network failure.
   const submission = useRef<{ signature: string; key: string } | null>(null);
   const runs = useQuery({
-    queryKey: ["runs"],
+    queryKey: api.key("runs"),
     queryFn: ({ signal }) => api.runs(signal),
     refetchInterval: (query) =>
       query.state.data?.some(isActiveRun) ? 2500 : false,
   });
   const releases = useQuery({
-    queryKey: ["releases"],
+    queryKey: api.key("releases"),
     queryFn: ({ signal }) => api.releases(signal),
   });
   const launch = useMutation({
     mutationFn: () => {
+      if (writeBlocked || !revision || !revision.spec.modes?.includes(mode))
+        throw new Error("Select an active compatible agent revision and mode.");
       if (
         (mode === "live" && !liveConfirmed) ||
         (judge === "azure" && !judgeConfirmed)
@@ -525,12 +584,18 @@ export default function Runs() {
           "Confirm each selected live provider's usage costs before starting.",
         );
       }
-      const signature = JSON.stringify({ releaseId, revision, mode, judge });
+      const signature = JSON.stringify({
+        projectId: project.id,
+        releaseId,
+        revision: revision.id,
+        mode,
+        judge,
+      });
       if (submission.current?.signature !== signature)
         submission.current = { signature, key: crypto.randomUUID() };
       return api.startRun(
         releaseId,
-        revision,
+        revision.id,
         mode,
         submission.current.key,
         judge,
@@ -538,8 +603,9 @@ export default function Runs() {
     },
     onSuccess: (run) => {
       submission.current = null;
-      client.invalidateQueries({ queryKey: ["runs"] });
-      client.invalidateQueries({ queryKey: ["summary"] });
+      client.invalidateQueries({ queryKey: api.key("runs") });
+      client.invalidateQueries({ queryKey: api.key("summary") });
+      clearDirty();
       setParams({ run: run.id });
       setShowLaunch(false);
     },
@@ -553,6 +619,7 @@ export default function Runs() {
         action={
           <button
             className="button"
+            disabled={writeBlocked}
             onClick={() => setShowLaunch((value) => !value)}
           >
             <Play size={16} />
@@ -572,13 +639,16 @@ export default function Runs() {
         <section className="panel">
           <SectionHeading
             title="Configure an evaluation"
-            detail="Run fixed and buggy separately against the same release to compare their behavior."
+            detail="Run registered agent revisions separately against the same release to compare their behavior."
           />
           <form
             className="form-stack"
             onSubmit={(event) => {
               event.preventDefault();
               if (
+                writeBlocked ||
+                !revision ||
+                !revision.spec.modes?.includes(mode) ||
                 launch.isPending ||
                 !releases.data?.some((release) => release.id === releaseId) ||
                 (mode === "live" && !liveConfirmed) ||
@@ -624,21 +694,16 @@ export default function Runs() {
               </label>
             )}
             <div className="form-row">
-              <label htmlFor="run-agent-revision">
-                Agent revision
-                <select
-                  id="run-agent-revision"
-                  aria-label="Agent revision"
-                  value={revision}
-                  disabled={launch.isPending}
-                  onChange={(event) =>
-                    setRevision(event.target.value as AgentRevision)
-                  }
-                >
-                  <option value="fixed">Fixed</option>
-                  <option value="buggy">Buggy</option>
-                </select>
-              </label>
+              <AgentSelector
+                value={revision}
+                disabled={launch.isPending || writeBlocked}
+                onChange={(value) => {
+                  setRevision(value);
+                  setMode(value?.spec.modes?.[0] ?? "mock");
+                  setLiveConfirmed(false);
+                  setJudgeConfirmed(false);
+                }}
+              />
               <label>
                 Execution mode
                 <select
@@ -649,10 +714,16 @@ export default function Runs() {
                     setLiveConfirmed(false);
                   }}
                 >
-                  <option value="mock">
+                  <option
+                    value="mock"
+                    disabled={!revision?.spec.modes?.includes("mock")}
+                  >
                     Mock / synthetic deterministic execution
                   </option>
-                  <option value="live">
+                  <option
+                    value="live"
+                    disabled={!revision?.spec.modes?.includes("live")}
+                  >
                     Live / requires backend configuration
                   </option>
                 </select>
@@ -740,6 +811,9 @@ export default function Runs() {
               <button
                 className="button"
                 disabled={
+                  writeBlocked ||
+                  !revision ||
+                  !revision.spec.modes?.includes(mode) ||
                   launch.isPending ||
                   !releaseId ||
                   !releases.data?.some((release) => release.id === releaseId) ||
@@ -776,6 +850,7 @@ export default function Runs() {
             action={
               <button
                 className="button secondary"
+                disabled={writeBlocked}
                 onClick={() => setShowLaunch(true)}
               >
                 Configure the first run
@@ -816,7 +891,7 @@ export default function Runs() {
                         </div>
                       </td>
                       <td>
-                        <Status value={run.agent_revision} />
+                        {run.agent_name} / {run.agent_revision_label}
                       </td>
                       <td>{run.mode}</td>
                       <td>

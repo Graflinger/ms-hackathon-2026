@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import {
+  useProjectApi,
+  useProject,
+  useDirty,
+  useProjectSearchParams as useSearchParams,
+} from "../project";
+import { AgentSelector, ExecutionIdentity } from "../agent-selector";
 import { Flag, MessageSquare, Plus, Send, Wrench } from "lucide-react";
 import {
-  api,
-  type AgentRevision,
+  type Revision,
   type FeedbackInput,
   type Session,
   type ToolCall,
@@ -32,6 +37,8 @@ function FeedbackForm({
   target: FeedbackTarget;
   onClose: () => void;
 }) {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [issue, setIssue] = useState("");
   const [comment, setComment] = useState("");
@@ -40,12 +47,13 @@ function FeedbackForm({
   const save = useMutation({
     mutationFn: (input: FeedbackInput) => api.addFeedback(input),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["feedback"] });
-      client.invalidateQueries({ queryKey: ["summary"] });
+      client.invalidateQueries({ queryKey: api.key("feedback") });
+      client.invalidateQueries({ queryKey: api.key("summary") });
     },
   });
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (writeBlocked || save.isPending) return;
     setError(null);
     try {
       let parsed: Record<string, unknown> | undefined;
@@ -69,6 +77,7 @@ function FeedbackForm({
       );
     }
   }
+  useDirty(!save.isSuccess && !!(issue || comment || correction));
   return (
     <section className="feedback-compose">
       <SectionHeading
@@ -135,7 +144,9 @@ function FeedbackForm({
           {(error || save.error) && <ErrorState error={error || save.error} />}
           <button
             className="button align-start"
-            disabled={save.isPending || !comment.trim() || !issue.trim()}
+            disabled={
+              writeBlocked || save.isPending || !comment.trim() || !issue.trim()
+            }
           >
             {save.isPending ? "Saving..." : "Submit feedback"}
           </button>
@@ -152,6 +163,7 @@ function ToolTrace({
   call: ToolCall;
   onFeedback: (target: FeedbackTarget) => void;
 }) {
+  const { writeBlocked } = useProject();
   return (
     <details className="tool-trace">
       <summary>
@@ -177,6 +189,7 @@ function ToolTrace({
         )}
         <button
           className="button small secondary"
+          disabled={writeBlocked}
           onClick={() =>
             onFeedback({
               target: "tool",
@@ -200,6 +213,8 @@ function Conversation({
   sessionId: string;
   onNewSession: () => void;
 }) {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [message, setMessage] = useState("");
   const [waitingAfter, setWaitingAfter] = useState<number | null>(null);
@@ -207,7 +222,7 @@ function Conversation({
     null,
   );
   const session = useQuery({
-    queryKey: ["session", sessionId],
+    queryKey: api.key("session", sessionId),
     queryFn: ({ signal }) => api.session(sessionId, signal),
     refetchInterval: 2500,
   });
@@ -215,12 +230,21 @@ function Conversation({
     mutationFn: (content: string) => api.sendMessage(sessionId, content),
     onSuccess: () => {
       setMessage("");
-      client.invalidateQueries({ queryKey: ["session", sessionId] });
-      client.invalidateQueries({ queryKey: ["sessions"] });
+      client.invalidateQueries({ queryKey: api.key("session", sessionId) });
+      client.invalidateQueries({ queryKey: api.key("sessions") });
     },
     onError: () => setWaitingAfter(null),
   });
   const data = session.data;
+  const agents = useQuery({
+    queryKey: api.key("agents"),
+    queryFn: ({ signal }) => api.agents(signal),
+  });
+  const agentArchived = !agents.data?.some(
+    (a) => a.id === data?.agent_id && !a.archived,
+  );
+  const readOnly = writeBlocked || agentArchived;
+  useDirty(!!message);
   const assistantCount =
     data?.messages?.filter((item) => item.role === "assistant").length ?? 0;
   const executionFailed =
@@ -237,7 +261,14 @@ function Conversation({
       assistantCount <= waitingAfter);
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!message.trim() || waiting || send.isPending || executionFailed) return;
+    if (
+      readOnly ||
+      !message.trim() ||
+      waiting ||
+      send.isPending ||
+      executionFailed
+    )
+      return;
     setWaitingAfter(assistantCount);
     send.mutate(message.trim());
   }
@@ -258,8 +289,17 @@ function Conversation({
         <SectionHeading
           title={data.title || "Untitled session"}
           detail="Observed messages. No simulated token streaming."
-          action={<Status value={data.agent_revision} />}
+          action={<Status value={data.agent_revision_label} />}
         />
+        <div className="detail-body">
+          <ExecutionIdentity value={data} />
+          {readOnly && (
+            <Notice>
+              New messages are disabled while the project or agent is archived,
+              or registry readiness cannot be verified.
+            </Notice>
+          )}
+        </div>
         {session.isError && (
           <ErrorState error={session.error} retry={() => session.refetch()} />
         )}
@@ -291,6 +331,7 @@ function Conversation({
                   <div className="message-actions">
                     <button
                       className="quiet-button"
+                      disabled={writeBlocked}
                       onClick={() =>
                         setFeedbackTarget({ target: "answer", turn: item.turn })
                       }
@@ -300,6 +341,7 @@ function Conversation({
                     </button>
                     <button
                       className="quiet-button"
+                      disabled={writeBlocked}
                       onClick={() =>
                         setFeedbackTarget({
                           target: "missing_tool",
@@ -332,6 +374,7 @@ function Conversation({
             messages.
             <button
               className="button small secondary"
+              disabled={readOnly}
               type="button"
               onClick={onNewSession}
             >
@@ -362,7 +405,7 @@ function Conversation({
             placeholder="Ask the agent a question..."
             value={message}
             onChange={(event) => setMessage(event.target.value)}
-            disabled={send.isPending || waiting || executionFailed}
+            disabled={readOnly || send.isPending || waiting || executionFailed}
           />
           <div>
             <span className="field-hint">
@@ -371,7 +414,11 @@ function Conversation({
             <button
               className="button"
               disabled={
-                !message.trim() || send.isPending || waiting || executionFailed
+                readOnly ||
+                !message.trim() ||
+                send.isPending ||
+                waiting ||
+                executionFailed
               }
             >
               <Send size={15} />
@@ -422,6 +469,7 @@ function Conversation({
                 Flag a missing tool for a turn
                 <select
                   value=""
+                  disabled={writeBlocked}
                   onChange={(event) => {
                     if (event.target.value !== "")
                       setFeedbackTarget({
@@ -463,20 +511,24 @@ function Conversation({
 }
 
 export default function Playground() {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const selected = params.get("session");
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
-  const [revision, setRevision] = useState<AgentRevision>("fixed");
+  const [revision, setRevision] = useState<Revision | null>(null);
+  const clearDirty = useDirty(creating && (!!title || !!revision));
   const sessions = useQuery({
-    queryKey: ["sessions"],
+    queryKey: api.key("sessions"),
     queryFn: ({ signal }) => api.sessions(signal),
   });
   const create = useMutation({
-    mutationFn: () => api.createSession(title.trim(), revision),
+    mutationFn: () => api.createSession(title.trim(), revision!.id),
     onSuccess: (session: Session) => {
-      client.invalidateQueries({ queryKey: ["sessions"] });
+      client.invalidateQueries({ queryKey: api.key("sessions") });
+      clearDirty();
       setParams({ session: session.id });
       setCreating(false);
       setTitle("");
@@ -491,6 +543,7 @@ export default function Playground() {
         action={
           <button
             className="button"
+            disabled={writeBlocked}
             onClick={() => setCreating((value) => !value)}
           >
             <Plus size={16} />
@@ -509,6 +562,7 @@ export default function Playground() {
             className="form-stack"
             onSubmit={(event) => {
               event.preventDefault();
+              if (!revision || writeBlocked || create.isPending) return;
               create.mutate();
             }}
           >
@@ -521,22 +575,19 @@ export default function Playground() {
                   placeholder="What are you investigating?"
                 />
               </label>
-              <label>
-                Demo-agent revision
-                <select
-                  value={revision}
-                  onChange={(event) =>
-                    setRevision(event.target.value as AgentRevision)
-                  }
-                >
-                  <option value="fixed">Fixed</option>
-                  <option value="buggy">Buggy</option>
-                </select>
-              </label>
             </div>
+            <AgentSelector
+              value={revision}
+              onChange={setRevision}
+              purpose="chat"
+              disabled={create.isPending || writeBlocked}
+            />
             {create.error && <ErrorState error={create.error} />}
             <div className="form-actions">
-              <button className="button" disabled={create.isPending}>
+              <button
+                className="button"
+                disabled={writeBlocked || !revision || create.isPending}
+              >
                 {create.isPending ? "Creating..." : "Create session"}
               </button>
               <button
@@ -561,6 +612,7 @@ export default function Playground() {
             action={
               <button
                 className="button secondary"
+                disabled={writeBlocked}
                 onClick={() => setCreating(true)}
               >
                 <MessageSquare size={16} />
@@ -585,9 +637,8 @@ export default function Playground() {
                 <option value="">Select a session</option>
                 {sessions.data.map((session) => (
                   <option key={session.id} value={session.id}>
-                    {session.title || "Untitled session"} /{" "}
-                    {session.agent_revision || "revision not reported"} /{" "}
-                    {session.id.slice(0, 8)}
+                    {session.title || "Untitled session"} / {session.agent_name}{" "}
+                    / {session.agent_revision_label} / {session.id.slice(0, 8)}
                   </option>
                 ))}
               </select>

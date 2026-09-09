@@ -1,6 +1,12 @@
 # Product Scope — GoldenLoop
 
-This document defines the GoldenLoop MVP scope. Implementation is pending.
+This document describes the local synthetic product and remaining scope. Project/agent organization is implemented; see the [README](../README.md) for runnable setup and verification limits. This is not a shared hosted service.
+
+## Project and agent organization
+
+Select a project before importing, reviewing, chatting, or running evaluations. Projects own cases/releases and registered agents; agents have immutable revisions. The sidebar selector and Agents screen support metadata/archive controls, revision creation/history, non-secret connection metadata, and approved binding readiness. Sessions/runs pin a revision; compatible agents can use the same project release. V2 enforces scope in backend lookups/storage, not just list filters. Existing data migrates to Synthetic Demo without rewriting hashes/evidence. See the [delivered contract](projects-and-agents.md) for setup and compatibility.
+
+Multiple logical agents reuse `synthetic-customer` / `goldenloop-demo-agent==0.2.0`; registration does not add arbitrary endpoints/protocols. Live revisions require project-approved operator bindings, while judge configuration stays independent/global and snapshotted. Migrated revisions remain mock-only in v2; live execution needs a new revision. Readiness is configuration only, with no dedicated connectivity probe.
 
 ## Product thesis
 
@@ -14,7 +20,7 @@ Upload `.xlsx` or CSV, map columns, preview parsed rows and errors, then import 
 
 ### 2. Chat and inspect
 
-Select the configured target agent and conduct a multi-turn conversation. Display answers beside a trace timeline of tool names, arguments, results, timing, and errors. Annotate either an answer or a specific tool call, including corrected arguments, missing/forbidden calls, or expected behavior.
+Select a registered agent/revision and conduct a mock multi-turn conversation. The UI polls completed answers and observable tool arguments/results/errors, with timing where available. Annotate an answer, observed tool call, or missing call. Live Playground and token/incremental-span streaming are not implemented.
 
 This requires an instrumented agent or an explicit trace-return contract. An answer-only endpoint cannot reveal internal tool calls. Execution traces are not hidden chain-of-thought. If traces are unavailable, label the limitation rather than infer calls from text.
 
@@ -24,16 +30,16 @@ Save an interaction and its feedback as a candidate case, including required con
 
 ### 4. Evaluate and diagnose
 
-Choose a dataset release, agent revision, evaluator configuration, and execution mode. Run answer and tool checks plus a judge rubric; inspect evidence and errors per case. Compare runs for quality, latency, and usage/cost when available. Show unknown cost as unknown, and distinguish agent execution from judge cost.
+Choose a project release, registered revision, execution mode, and independent judge selection. Checks/rubrics are pinned in the release; the selected judge metadata is snapshotted. Compare same-release runs using per-check evidence and available observation telemetry. Missing telemetry remains unknown; aggregate agent/judge cost reporting, monetary budgets, and reusable evaluator-profile management remain gaps.
 
 ### 5. Reuse from CI/CD
 
-- Hosted: request agent invocation and evaluation; consume a machine-readable gate result. Hosted scoring of externally generated answers/traces is deferred.
-- Repository-local: export a pinned case bundle and a thin test wrapper using the same SDK. Run without depending on this workbench's backend.
+- API path: request invocation/evaluation and consume a machine gate result. The asynchronous contract is delivered locally; shared hosting/authentication and hosted submitted-output scoring are not.
+- Repository-local: explicitly select revision/mode/judge for a v2 bundle with non-secret specification and a judge-pinned pytest wrapper using SDK 0.2.0. No backend is required; live replay needs CI credentials matching the pins. V1 bundles remain supported; package publication is pending.
 
 ## MVP scope
 
-- One workbench UI and backend; one configured, instrumented agent with safe demo tools.
+- One workbench UI and backend; project-scoped agent registration and revision selection, initially using the existing instrumented demo adapter and safe tools. Multiple logical agents do not imply multiple framework adapters.
 - Excel and CSV import with mapping and row validation.
 - Single-turn cases and deterministic scripted multi-turn scenarios.
 - Answer feedback and tool argument/behavior annotations.
@@ -46,12 +52,16 @@ Defer autonomous user simulation, multiple agent-framework adapters, two-languag
 
 ## Demo / acceptance story
 
-1. Import a small spreadsheet and correct one validation error.
+1. Select a project, register an agent with buggy/fixed mock revisions (or use Synthetic Demo), and import a small spreadsheet. Correct validation errors in the source and re-upload; inline correction is not implemented.
 2. Chat with the demo agent; observe a tool call using the wrong customer identifier despite a plausible final answer.
 3. Annotate the parameter, verify the correction, and publish a golden case.
-4. Run evaluation: the tool assertion fails even if the answer judge is satisfied.
-5. Fix the demo agent and rerun against the same release.
-6. Trigger the hosted check from CI, then export and run equivalent checks in a small agent-repository example.
+4. Run the buggy revision: the required tool assertion blocks the gate regardless of plausible answer content. Live judging is optional, separately configured, and not needed for this mock demo.
+5. Select the fixed revision and rerun against the same release. These controlled variants are not proof of a production improvement.
+6. Trigger the local API check from CI, then explicitly export and run the fixed/mock/no-judge bundle without the backend.
 7. Edit a case into a new release; show that prior results retain their original expectations.
 
 Synthetic identifiers and fixtures must be labeled. Customer coverage requires separately approved real scenarios.
+
+## Remaining work
+
+Actual Foundry tool-calling/structured-output validation, full devcontainer rebuild verification, shared authentication/hosting, SDK distribution, additional adapters, live Playground, dataset grouping beyond releases, import merging, calibration/human judge overrides, and production data/retention governance remain outside delivered behavior. Current resource limits are global count/deadline/concurrency bounds, not connectivity assurance, project quotas, or monetary caps.

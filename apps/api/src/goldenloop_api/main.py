@@ -31,6 +31,8 @@ from .db import (
     ReleaseCase,
     Run,
     add_event,
+    pending_count,
+    require_active_project,
     uid,
 )
 from .exports import MAX_RELEASE_BYTES, cases_bytes, export_bundle
@@ -49,11 +51,16 @@ from .schemas import (
     ReviewFeedback,
     SendMessage,
 )
+from .scope import current_scope, execution_metadata, request_scope
 from .security import LOCAL_IDENTITY, LocalOnlyMiddleware, process_lock, require
 
 
 def case_record(row):
-    return {"case": row.payload, "status": row.status, "reviewer": row.reviewer, "reason": row.reason}
+    result = {"case": row.payload, "status": row.status, "reviewer": row.reviewer, "reason": row.reason}
+    scope = current_scope.get()
+    if scope and not scope.legacy:
+        result["project_id"] = scope.project_id
+    return result
 
 
 def release_record(row):
@@ -64,7 +71,10 @@ def chat_record(row, detail=False):
     keys = ["id", "title", "agent_revision", "created_at", "status", "trace_complete", "error"]
     if detail:
         keys += ["messages", "tool_calls"]
-    return {**{key: getattr(row, key) for key in keys}, "mode": "mock"}
+    result = {**{key: getattr(row, key) for key in keys}, "mode": "mock"}
+    if current_scope.get() and not current_scope.get().legacy:
+        result.update(execution_metadata(row))
+    return result
 
 
 def feedback_record(row):
@@ -81,13 +91,23 @@ def run_record(row, release_name=None, detail=False):
     keys = ["id", "release_id", "agent_revision", "mode", "status", "gate", "created_at"]
     if detail:
         keys += ["results", "error", "lineage"]
-    return {**{key: getattr(row, key) for key in keys}, "release_name": release_name}
+    result = {**{key: getattr(row, key) for key in keys}, "release_name": release_name}
+    if current_scope.get() and not current_scope.get().legacy:
+        result.update(execution_metadata(row))
+    return result
 
 
 async def get_or_404(session, model, key):
     value = await session.get(model, key)
     if value is None:
         raise HTTPException(404, "Record not found")
+    scope = current_scope.get()
+    if scope and scope.writing and isinstance(value, ChatSession):
+        revision = value.pinned_revision
+        if revision and revision.agent.archived:
+            raise HTTPException(409, "Agent is archived")
+    if scope and scope.writing and isinstance(value, Feedback):
+        await get_or_404(session, ChatSession, value.session_id)
     return value
 
 
@@ -240,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def unexpected_error(_request, _exc):
         return JSONResponse({"detail": "Internal operation failed"}, status_code=500)
 
-    api = APIRouter(prefix="/api/v1", dependencies=[Depends(require("read"))])
+    api = APIRouter(prefix="/api/v1", dependencies=[Depends(require("read")), Depends(request_scope)])
     review = [Depends(require("review"))]
     execute = [Depends(require("execute"))]
 
@@ -488,7 +508,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @api.post("/chat-sessions", dependencies=execute, status_code=201, response_model=responses.ChatDetail)
     async def create_chat(body: CreateChat):
         async with db.write() as session:
-            chat = ChatSession(title=clean(body.title), agent_revision=body.agent_revision)
+            from .registry import selected_revision
+
+            revision = await selected_revision(session, "synthetic-" + body.agent_revision, active=True)
+            chat = ChatSession(
+                title=clean(body.title),
+                agent_revision=body.agent_revision,
+                agent_revision_id=revision.id,
+                pinned_revision=revision,
+            )
             session.add(chat)
             await session.flush()
             return chat_record(chat, True)
@@ -516,11 +544,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             turn = len([message for message in chat.messages if message["role"] == "user"])
             if turn >= 50:
                 raise HTTPException(422, "Session turn limit exceeded")
-            pending = await session.scalar(
-                select(func.count())
-                .select_from(MessageCommand)
-                .where(MessageCommand.status.in_(["queued", "running"]))
-            )
+            pending = await pending_count(session, MessageCommand)
             if pending >= settings.max_pending:
                 raise HTTPException(429, "Chat queue capacity exceeded")
             command = MessageCommand(session_id=session_id, turn=turn, content=clean(body.content))
@@ -602,6 +626,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "synthetic": True,
                 },
             )
+            if current_scope.get() and not current_scope.get().legacy:
+                case.source.update(execution_metadata(chat))
             row = await insert_case(
                 session, case, "Observed user history only; expectations require independent review"
             )
@@ -633,7 +659,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(409, "Idempotency key reused with different parameters")
                 release = await get_or_404(session, Release, existing.release_id)
                 return run_record(existing, release.name)
+            await require_active_project(session, current_scope.get().project_id)
             release = await get_or_404(session, Release, body.release_id)
+            from .registry import selected_revision
+
+            revision = await selected_revision(session, "synthetic-" + body.agent_revision, active=True)
             if body.mode == "live":
                 live_ready(settings)
             selected = [
@@ -645,9 +675,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             ]
             judging = judge_lineage(settings, selected, body.judge)
-            pending = await session.scalar(
-                select(func.count()).select_from(Run).where(Run.status.in_(["queued", "running"]))
-            )
+            pending = await pending_count(session, Run)
             if pending >= settings.max_pending:
                 raise HTTPException(429, "Evaluation queue capacity exceeded")
             lineage = clean(
@@ -656,7 +684,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "schema_version": "1",
                     "release_id": release.id,
                     "content_hash": release.content_hash,
-                    "agent_package_version": "0.1.0",
+                    "agent_package_version": "0.2.0",
                     "agent_revision": body.agent_revision,
                     "mode": body.mode,
                     "fixture_version": "synthetic-v1",
@@ -672,7 +700,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "executor": LOCAL_IDENTITY,
                 }
             )
-            run = Run(**body.model_dump(exclude={"judge"}), lineage=lineage)
+            run = Run(
+                **body.model_dump(exclude={"judge"}),
+                lineage=lineage,
+                agent_revision_id=revision.id,
+                pinned_revision=revision,
+            )
             session.add(run)
             await session.flush()
             add_event(session, "run:" + run.id, "status", {"status": "queued", "gate": None})
@@ -700,8 +733,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return result
 
     async def events(request, record_id, model, prefix):
-        async with db.sessions() as session:
+        async def check_record(session):
             await get_or_404(session, model, record_id)
+
+        await db.read(check_record)
         try:
             cursor = int(request.headers.get("last-event-id", request.query_params.get("after", "0")))
             if not 0 <= cursor <= 2**63 - 1:
@@ -711,19 +746,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async def stream():
             nonlocal cursor
+
+            async def read_batch(session):
+                # Read status first: a completion between queries must not hide its final events.
+                record = await session.get(model, record_id)
+                terminal = record.status in TERMINAL or record.status == "idle"
+                rows = (
+                    await session.scalars(
+                        select(Event)
+                        .where(Event.stream == prefix + record_id, Event.id > cursor)
+                        .order_by(Event.id)
+                        .limit(100)
+                    )
+                ).all()
+                return terminal, rows
+
             while True:
-                async with db.sessions() as session:
-                    # Read status first: a completion between queries must not hide its final events.
-                    record = await session.get(model, record_id)
-                    terminal = record.status in TERMINAL or record.status == "idle"
-                    rows = (
-                        await session.scalars(
-                            select(Event)
-                            .where(Event.stream == prefix + record_id, Event.id > cursor)
-                            .order_by(Event.id)
-                            .limit(100)
-                        )
-                    ).all()
+                terminal, rows = await db.read(read_batch)
                 for row in rows:
                     cursor = row.id
                     yield f"id: {row.id}\nevent: {row.kind}\ndata: {json.dumps(clean(row.payload), ensure_ascii=True)}\n\n"
@@ -760,6 +799,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await events(request, run_id, Run, "run:")
 
     app.include_router(api)
+    from .registry import install_v2
+
+    install_v2(app, api, db, settings)
     return app
 
 

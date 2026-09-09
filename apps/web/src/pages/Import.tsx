@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, FileSpreadsheet, Upload } from "lucide-react";
-import { api, type ImportPreview } from "../api";
+import { type ImportPreview } from "../api";
+import { useProjectApi, useProject, useDirty } from "../project";
 import {
   EmptyState,
   ErrorState,
@@ -37,6 +38,8 @@ function displayValue(value: unknown): string {
 }
 
 export default function ImportPage() {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheet, setSheet] = useState("");
@@ -66,16 +69,18 @@ export default function ImportPage() {
         sheet || undefined,
       ),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["cases"] });
-      client.invalidateQueries({ queryKey: ["summary"] });
+      client.invalidateQueries({ queryKey: api.key("cases") });
+      client.invalidateQueries({ queryKey: api.key("summary") });
     },
   });
   function submitPreview(event: FormEvent) {
     event.preventDefault();
+    if (writeBlocked || upload.isPending || commit.isPending) return;
     setPreview(null);
     upload.mutate();
   }
   const flagged = preview?.rows.filter((row) => row.errors.length).length ?? 0;
+  useDirty(!!file && !commit.isSuccess);
   return (
     <>
       <PageHeader
@@ -96,338 +101,348 @@ export default function ImportPage() {
           <b>03</b>Commit candidates
         </span>
       </div>
-      <section className="panel">
-        <SectionHeading
-          title="Source file"
-          detail="Synthetic data only for this demo. Remove sensitive data before upload."
-        />
-        <form className="import-upload" onSubmit={submitPreview}>
-          <div className="file-zone">
-            <FileSpreadsheet size={32} strokeWidth={1.3} />
-            <div>
-              <label htmlFor="source-file">
-                Choose an Excel (.xlsx) or CSV file
-              </label>
-              <p>
-                The original rows are previewed before anything is committed.
-              </p>
-              <input
-                id="source-file"
-                type="file"
-                accept=".csv,.xlsx"
-                required
-                disabled={upload.isPending || commit.isPending}
-                onChange={(event) => {
-                  setFile(event.target.files?.[0] ?? null);
-                  setPreview(null);
-                  setSheet("");
-                  setConfirmed(false);
-                  upload.reset();
-                  commit.reset();
-                }}
-              />
-            </div>
-          </div>
-          <div className="form-row">
-            <label>
-              Worksheet{" "}
-              <span className="optional">
-                optional; blank uses backend default
-              </span>
-              <input
-                value={sheet}
-                disabled={upload.isPending || commit.isPending}
-                list="sheet-options"
-                placeholder="Worksheet name"
-                onChange={(event) => {
-                  setSheet(event.target.value);
-                  setPreview(null);
-                  setConfirmed(false);
-                  commit.reset();
-                }}
-              />
-              <datalist id="sheet-options">
-                {upload.data?.sheets.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-            </label>
-            <button
-              className="button"
-              disabled={!file || upload.isPending || commit.isPending}
-            >
-              <Upload size={16} />
-              {upload.isPending ? "Reading file..." : "Preview file"}
-            </button>
-          </div>
-          {upload.error && <ErrorState error={upload.error} />}
-        </form>
-      </section>
-      {!preview && !upload.isPending && (
-        <EmptyState title="Inspect before you import">
-          Choose a source file to see its columns, row values, and validation
-          messages.
-        </EmptyState>
-      )}
-      {preview && (
-        <>
-          <section className="panel">
-            <SectionHeading
-              title="Inspect the source"
-              detail={`${preview.rows.length} preview rows / ${preview.columns.length} columns / ${flagged} flagged rows`}
-            />
-            <div className="detail-body">
-              {preview.sheets.length > 0 && (
-                <p className="muted">
-                  Available worksheets: {preview.sheets.join(", ")}. Change the
-                  worksheet above and preview again to switch sheets.
-                </p>
-              )}
-              {preview.errors.length > 0 && (
-                <Notice tone="warning">
-                  <strong>File validation messages</strong>
-                  <ul>
-                    {preview.errors.map((error, index) => (
-                      <li key={index}>{error}</li>
-                    ))}
-                  </ul>
-                </Notice>
-              )}
-              {flagged > 0 && (
-                <Notice tone="warning">
-                  Flagged rows need attention. The backend determines which rows
-                  can be committed; review any returned errors after import.
-                </Notice>
-              )}
-            </div>
-            {preview.rows.length ? (
-              <div className="table-scroll preview-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Row</th>
-                      {preview.columns.map((column) => (
-                        <th key={column}>{column}</th>
-                      ))}
-                      <th>Validation</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.rows.map((row, index) => (
-                      <tr
-                        key={`${row.row}-${index}`}
-                        className={row.errors.length ? "flagged-row" : ""}
-                      >
-                        <td className="mono">{row.row}</td>
-                        {preview.columns.map((column) => (
-                          <td
-                            key={column}
-                            title={displayValue(row.values[column])}
-                          >
-                            {displayValue(row.values[column])}
-                          </td>
-                        ))}
-                        <td>
-                          {row.errors.length ? (
-                            row.errors.map((error, index) => (
-                              <div className="row-error" key={index}>
-                                {error}
-                              </div>
-                            ))
-                          ) : (
-                            <span className="muted">No preview errors</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <EmptyState title="No rows in this preview">
-                Select another worksheet or upload a file with data rows.
-              </EmptyState>
-            )}
-          </section>
-          <section className="panel">
-            <SectionHeading
-              title="Map columns to a candidate"
-              detail="Mappings are sent as canonical field names to uploaded column names. Nothing is approved automatically."
-            />
-            <form
-              className="form-stack"
-              onSubmit={(event) => {
-                event.preventDefault();
-                commit.mutate();
-              }}
-            >
-              <div className="mapping-grid">
-                <span className="small-label">CANONICAL FIELD</span>
-                <span className="small-label">UPLOADED COLUMN</span>
-                {mappingFields.map((field) => (
-                  <div className="mapping-row" key={field.key}>
-                    <label htmlFor={`map-${field.key}`}>
-                      {field.label}
-                      {field.required && (
-                        <span className="required-mark"> *</span>
-                      )}
-                      <code>{field.key}</code>
-                    </label>
-                    <select
-                      id={`map-${field.key}`}
-                      required={field.required}
-                      disabled={commit.isPending || commit.isSuccess}
-                      value={mapping[field.key] || ""}
-                      onChange={(event) =>
-                        setMapping((previous) => ({
-                          ...previous,
-                          [field.key]: event.target.value,
-                        }))
-                      }
-                    >
-                      <option value="">
-                        {field.required ? "Select a column" : "Do not import"}
-                      </option>
-                      {preview.columns.map((column) => (
-                        <option key={column} value={column}>
-                          {column}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ))}
-              </div>
-              <details className="help-details">
-                <summary>Additional canonical field mapping</summary>
+      <fieldset className="write-boundary" disabled={writeBlocked}>
+        <section className="panel">
+          <SectionHeading
+            title="Source file"
+            detail="Synthetic data only for this demo. Remove sensitive data before upload."
+          />
+          <form className="import-upload" onSubmit={submitPreview}>
+            <div className="file-zone">
+              <FileSpreadsheet size={32} strokeWidth={1.3} />
+              <div>
+                <label htmlFor="source-file">
+                  Choose an Excel (.xlsx) or CSV file
+                </label>
                 <p>
-                  For backend-supported import fields beyond the practical
-                  mapping above. Use the canonical field key exactly;
-                  unsupported fields may be rejected by the API.
+                  The original rows are previewed before anything is committed.
                 </p>
-                <div className="form-row">
-                  <label>
-                    Canonical field
-                    <input
-                      value={extraField}
-                      onChange={(event) => setExtraField(event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Uploaded column
-                    <select
-                      value={extraColumn}
-                      onChange={(event) => setExtraColumn(event.target.value)}
-                    >
-                      <option value="">Select a column</option>
-                      {preview.columns.map((column) => (
-                        <option key={column}>{column}</option>
+                <input
+                  id="source-file"
+                  type="file"
+                  accept=".csv,.xlsx"
+                  required
+                  disabled={upload.isPending || commit.isPending}
+                  onChange={(event) => {
+                    setFile(event.target.files?.[0] ?? null);
+                    setPreview(null);
+                    setSheet("");
+                    setConfirmed(false);
+                    upload.reset();
+                    commit.reset();
+                  }}
+                />
+              </div>
+            </div>
+            <div className="form-row">
+              <label>
+                Worksheet{" "}
+                <span className="optional">
+                  optional; blank uses backend default
+                </span>
+                <input
+                  value={sheet}
+                  disabled={upload.isPending || commit.isPending}
+                  list="sheet-options"
+                  placeholder="Worksheet name"
+                  onChange={(event) => {
+                    setSheet(event.target.value);
+                    setPreview(null);
+                    setConfirmed(false);
+                    commit.reset();
+                  }}
+                />
+                <datalist id="sheet-options">
+                  {upload.data?.sheets.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </label>
+              <button
+                className="button"
+                disabled={!file || upload.isPending || commit.isPending}
+              >
+                <Upload size={16} />
+                {upload.isPending ? "Reading file..." : "Preview file"}
+              </button>
+            </div>
+            {upload.error && <ErrorState error={upload.error} />}
+          </form>
+        </section>
+        {!preview && !upload.isPending && (
+          <EmptyState title="Inspect before you import">
+            Choose a source file to see its columns, row values, and validation
+            messages.
+          </EmptyState>
+        )}
+        {preview && (
+          <>
+            <section className="panel">
+              <SectionHeading
+                title="Inspect the source"
+                detail={`${preview.rows.length} preview rows / ${preview.columns.length} columns / ${flagged} flagged rows`}
+              />
+              <div className="detail-body">
+                {preview.sheets.length > 0 && (
+                  <p className="muted">
+                    Available worksheets: {preview.sheets.join(", ")}. Change
+                    the worksheet above and preview again to switch sheets.
+                  </p>
+                )}
+                {preview.errors.length > 0 && (
+                  <Notice tone="warning">
+                    <strong>File validation messages</strong>
+                    <ul>
+                      {preview.errors.map((error, index) => (
+                        <li key={index}>{error}</li>
                       ))}
-                    </select>
-                  </label>
-                  <button
-                    className="button secondary"
-                    type="button"
-                    disabled={
-                      !extraField.trim() ||
-                      !extraColumn ||
-                      commit.isPending ||
-                      commit.isSuccess
-                    }
-                    onClick={() => {
-                      setMapping((previous) => ({
-                        ...previous,
-                        [extraField.trim()]: extraColumn,
-                      }));
-                      setExtraField("");
-                      setExtraColumn("");
-                    }}
-                  >
-                    Add mapping
-                  </button>
+                    </ul>
+                  </Notice>
+                )}
+                {flagged > 0 && (
+                  <Notice tone="warning">
+                    Flagged rows need attention. The backend determines which
+                    rows can be committed; review any returned errors after
+                    import.
+                  </Notice>
+                )}
+              </div>
+              {preview.rows.length ? (
+                <div className="table-scroll preview-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Row</th>
+                        {preview.columns.map((column) => (
+                          <th key={column}>{column}</th>
+                        ))}
+                        <th>Validation</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.rows.map((row, index) => (
+                        <tr
+                          key={`${row.row}-${index}`}
+                          className={row.errors.length ? "flagged-row" : ""}
+                        >
+                          <td className="mono">{row.row}</td>
+                          {preview.columns.map((column) => (
+                            <td
+                              key={column}
+                              title={displayValue(row.values[column])}
+                            >
+                              {displayValue(row.values[column])}
+                            </td>
+                          ))}
+                          <td>
+                            {row.errors.length ? (
+                              row.errors.map((error, index) => (
+                                <div className="row-error" key={index}>
+                                  {error}
+                                </div>
+                              ))
+                            ) : (
+                              <span className="muted">No preview errors</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                {Object.entries(mapping)
-                  .filter(
-                    ([key]) =>
-                      !mappingFields.some((field) => field.key === key),
+              ) : (
+                <EmptyState title="No rows in this preview">
+                  Select another worksheet or upload a file with data rows.
+                </EmptyState>
+              )}
+            </section>
+            <section className="panel">
+              <SectionHeading
+                title="Map columns to a candidate"
+                detail="Mappings are sent as canonical field names to uploaded column names. Nothing is approved automatically."
+              />
+              <form
+                className="form-stack"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (
+                    writeBlocked ||
+                    !confirmed ||
+                    commit.isPending ||
+                    commit.isSuccess
                   )
-                  .map(([key, value]) => (
-                    <div className="extra-mapping" key={key}>
-                      <code>{key}</code>
-                      <span>{value}</span>
-                      <button
-                        className="button small secondary"
-                        type="button"
+                    return;
+                  commit.mutate();
+                }}
+              >
+                <div className="mapping-grid">
+                  <span className="small-label">CANONICAL FIELD</span>
+                  <span className="small-label">UPLOADED COLUMN</span>
+                  {mappingFields.map((field) => (
+                    <div className="mapping-row" key={field.key}>
+                      <label htmlFor={`map-${field.key}`}>
+                        {field.label}
+                        {field.required && (
+                          <span className="required-mark"> *</span>
+                        )}
+                        <code>{field.key}</code>
+                      </label>
+                      <select
+                        id={`map-${field.key}`}
+                        required={field.required}
                         disabled={commit.isPending || commit.isSuccess}
-                        onClick={() =>
-                          setMapping((previous) =>
-                            Object.fromEntries(
-                              Object.entries(previous).filter(
-                                ([field]) => field !== key,
-                              ),
-                            ),
-                          )
+                        value={mapping[field.key] || ""}
+                        onChange={(event) =>
+                          setMapping((previous) => ({
+                            ...previous,
+                            [field.key]: event.target.value,
+                          }))
                         }
                       >
-                        Remove {key}
-                      </button>
+                        <option value="">
+                          {field.required ? "Select a column" : "Do not import"}
+                        </option>
+                        {preview.columns.map((column) => (
+                          <option key={column} value={column}>
+                            {column}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   ))}
-              </details>
-              <label>
-                Duplicate policy
-                <select
-                  value={duplicates}
-                  disabled={commit.isPending || commit.isSuccess}
-                  onChange={(event) =>
-                    setDuplicates(event.target.value as typeof duplicates)
-                  }
-                >
-                  <option value="reject">Reject duplicates</option>
-                  <option value="new">Create as new cases</option>
-                </select>
-              </label>
-              <p className="field-hint">
-                Without a title mapping, the backend derives the case title from
-                the user message. Resolve preview errors in the source file and
-                upload again before committing.
-              </p>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  required
-                  checked={confirmed}
-                  disabled={commit.isPending || commit.isSuccess}
-                  onChange={(event) => setConfirmed(event.target.checked)}
-                />
-                I reviewed the preview and mapping. Import as unapproved
-                candidates.
-              </label>
-              {commit.error && <ErrorState error={commit.error} />}
-              <div className="form-actions">
-                <button
-                  className="button"
-                  disabled={
-                    commit.isPending ||
-                    commit.isSuccess ||
-                    !confirmed ||
-                    !preview.rows.length ||
-                    !!preview.errors.length ||
-                    flagged > 0 ||
-                    !mapping.user
-                  }
-                >
-                  {commit.isPending
-                    ? "Importing..."
-                    : commit.isSuccess
-                      ? "Import committed"
-                      : "Commit import"}
-                  <ArrowRight size={16} />
-                </button>
-              </div>
-            </form>
-          </section>
-        </>
-      )}
+                </div>
+                <details className="help-details">
+                  <summary>Additional canonical field mapping</summary>
+                  <p>
+                    For backend-supported import fields beyond the practical
+                    mapping above. Use the canonical field key exactly;
+                    unsupported fields may be rejected by the API.
+                  </p>
+                  <div className="form-row">
+                    <label>
+                      Canonical field
+                      <input
+                        value={extraField}
+                        onChange={(event) => setExtraField(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Uploaded column
+                      <select
+                        value={extraColumn}
+                        onChange={(event) => setExtraColumn(event.target.value)}
+                      >
+                        <option value="">Select a column</option>
+                        {preview.columns.map((column) => (
+                          <option key={column}>{column}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className="button secondary"
+                      type="button"
+                      disabled={
+                        !extraField.trim() ||
+                        !extraColumn ||
+                        commit.isPending ||
+                        commit.isSuccess
+                      }
+                      onClick={() => {
+                        setMapping((previous) => ({
+                          ...previous,
+                          [extraField.trim()]: extraColumn,
+                        }));
+                        setExtraField("");
+                        setExtraColumn("");
+                      }}
+                    >
+                      Add mapping
+                    </button>
+                  </div>
+                  {Object.entries(mapping)
+                    .filter(
+                      ([key]) =>
+                        !mappingFields.some((field) => field.key === key),
+                    )
+                    .map(([key, value]) => (
+                      <div className="extra-mapping" key={key}>
+                        <code>{key}</code>
+                        <span>{value}</span>
+                        <button
+                          className="button small secondary"
+                          type="button"
+                          disabled={commit.isPending || commit.isSuccess}
+                          onClick={() =>
+                            setMapping((previous) =>
+                              Object.fromEntries(
+                                Object.entries(previous).filter(
+                                  ([field]) => field !== key,
+                                ),
+                              ),
+                            )
+                          }
+                        >
+                          Remove {key}
+                        </button>
+                      </div>
+                    ))}
+                </details>
+                <label>
+                  Duplicate policy
+                  <select
+                    value={duplicates}
+                    disabled={commit.isPending || commit.isSuccess}
+                    onChange={(event) =>
+                      setDuplicates(event.target.value as typeof duplicates)
+                    }
+                  >
+                    <option value="reject">Reject duplicates</option>
+                    <option value="new">Create as new cases</option>
+                  </select>
+                </label>
+                <p className="field-hint">
+                  Without a title mapping, the backend derives the case title
+                  from the user message. Resolve preview errors in the source
+                  file and upload again before committing.
+                </p>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    required
+                    checked={confirmed}
+                    disabled={commit.isPending || commit.isSuccess}
+                    onChange={(event) => setConfirmed(event.target.checked)}
+                  />
+                  I reviewed the preview and mapping. Import as unapproved
+                  candidates.
+                </label>
+                {commit.error && <ErrorState error={commit.error} />}
+                <div className="form-actions">
+                  <button
+                    className="button"
+                    disabled={
+                      commit.isPending ||
+                      commit.isSuccess ||
+                      !confirmed ||
+                      !preview.rows.length ||
+                      !!preview.errors.length ||
+                      flagged > 0 ||
+                      !mapping.user
+                    }
+                  >
+                    {commit.isPending
+                      ? "Importing..."
+                      : commit.isSuccess
+                        ? "Import committed"
+                        : "Commit import"}
+                    <ArrowRight size={16} />
+                  </button>
+                </div>
+              </form>
+            </section>
+          </>
+        )}
+      </fieldset>
       {commit.data && (
         <section className="panel">
           <SectionHeading title="Import receipt" />

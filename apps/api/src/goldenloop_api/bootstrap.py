@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, event
 from .config import Settings, clean
 from .db import CaseHead, CaseRevision, Database, configure_sqlite, journal_mode
 
-SCHEMA_REVISION = "0001"
+SCHEMA_REVISION = "0002"
 
 
 def migrate(settings: Settings):

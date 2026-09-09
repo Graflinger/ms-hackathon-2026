@@ -127,3 +127,41 @@ class RunDetail(RunRecord):
     results: list[CaseResult]
     error: str | None
     lineage: dict[str, Any]
+
+
+class CaseRecordV2(CaseRecord):
+    project_id: str | None = None
+
+
+class ImportCommitV2(ResponseModel):
+    cases: list[CaseRecordV2]
+    errors: list[str]
+
+
+class ExecutionMetadata(ResponseModel):
+    project_id: str
+    agent_id: str
+    agent_name: str
+    agent_revision_id: str
+    agent_revision_label: str
+    spec_hash: str | None
+    legacy: bool
+
+
+class ChatRecordV2(ChatRecord, ExecutionMetadata):
+    agent_revision: str
+
+
+class ChatDetailV2(ChatRecordV2):
+    messages: list[Message]
+    tool_calls: list[ToolCall]
+
+
+class RunRecordV2(RunRecord, ExecutionMetadata):
+    agent_revision: str
+
+
+class RunDetailV2(RunRecordV2):
+    results: list[CaseResult]
+    error: str | None
+    lineage: dict[str, Any]

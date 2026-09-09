@@ -140,6 +140,13 @@ describe("import mapping", () => {
 
 describe("run comparison", () => {
   const run: Run = {
+    legacy: true,
+    project_id: "synthetic-demo",
+    agent_id: "synthetic-customer-lookup",
+    agent_name: "Synthetic Customer Lookup",
+    agent_revision_id: "synthetic-fixed",
+    agent_revision_label: "Fixed",
+    spec_hash: null,
     id: "a",
     release_id: "release-one",
     agent_revision: "fixed",
@@ -150,10 +157,15 @@ describe("run comparison", () => {
     created_at: "2026-09-08",
   };
   it("excludes other releases and the selected run", () => {
-    const other: Run = { ...run, id: "b", agent_revision: "buggy" };
+    const other: Run = { ...run, id: "b", agent_revision: "buggy", agent_revision_id: "synthetic-buggy", agent_revision_label: "Buggy" };
     expect(
       comparableRuns(
-        [run, other, { ...run, id: "c", release_id: "release-two" }],
+        [
+          run,
+          other,
+          { ...run, id: "c", release_id: "release-two" },
+          { ...run, id: "foreign", project_id: "other-project" },
+        ],
         run,
       ),
     ).toEqual([other]);

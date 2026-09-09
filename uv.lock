@@ -527,7 +527,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "goldenloop-demo-agent"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/goldenloop_demo_agent" }
 dependencies = [
     { name = "goldenloop-eval" },
@@ -539,6 +539,8 @@ live = [
     { name = "agent-framework-core" },
     { name = "agent-framework-openai" },
     { name = "azure-identity" },
+    { name = "httpx" },
+    { name = "openai" },
 ]
 test = [
     { name = "pytest" },
@@ -550,6 +552,8 @@ requires-dist = [
     { name = "agent-framework-openai", marker = "extra == 'live'", specifier = "==1.14.2" },
     { name = "azure-identity", marker = "extra == 'live'", specifier = ">=1.25.3,<2" },
     { name = "goldenloop-eval", editable = "packages/goldenloop_eval" },
+    { name = "httpx", marker = "extra == 'live'", specifier = ">=0.28,<1" },
+    { name = "openai", marker = "extra == 'live'", specifier = ">=3.8,<4" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<10" },
 ]
@@ -557,7 +561,7 @@ provides-extras = ["test", "live"]
 
 [[package]]
 name = "goldenloop-eval"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/goldenloop_eval" }
 dependencies = [
     { name = "jsonschema" },
@@ -568,6 +572,7 @@ dependencies = [
 [package.optional-dependencies]
 live = [
     { name = "azure-identity" },
+    { name = "httpx" },
     { name = "openai" },
 ]
 test = [
@@ -577,8 +582,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "azure-identity", marker = "extra == 'live'", specifier = ">=1.25.3,<2" },
+    { name = "httpx", marker = "extra == 'live'", specifier = ">=0.28,<1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
-    { name = "openai", marker = "extra == 'live'", specifier = ">=2.25,<4" },
+    { name = "openai", marker = "extra == 'live'", specifier = ">=3.8,<4" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<10" },
     { name = "referencing", specifier = ">=0.35,<1" },

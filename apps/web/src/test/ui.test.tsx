@@ -9,7 +9,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "../api";
+import { ApiError } from "../api";
+import { api, TestProject, execution, mockRegistry } from "./project-fixtures";
 import { EmptyState, ErrorState, Status } from "../components";
 import Overview from "../pages/Overview";
 import { CaseEditor } from "../pages/Candidates";
@@ -27,7 +28,9 @@ function renderWithClient(ui: React.ReactNode, route = "/") {
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
+        <TestProject>{ui}</TestProject>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
   return { ...view, client };
@@ -234,7 +237,12 @@ describe("review and execution boundaries", () => {
   it("pins selected revisions and blocks background replacements until explicitly reselected", async () => {
     vi.spyOn(api, "releases").mockResolvedValue([]);
     vi.spyOn(api, "cases").mockResolvedValue([
-      { case: { ...value, revision: 3 }, status: "approved", reviewer: null, reason: null },
+      {
+        case: { ...value, revision: 3 },
+        status: "approved",
+        reviewer: null,
+        reason: null,
+      },
     ]);
     const create = vi
       .spyOn(api, "createRelease")
@@ -259,10 +267,9 @@ describe("review and execution boundaries", () => {
     );
     await screen.findByRole("alert");
     act(() => {
-      client.setQueryData(
-        ["cases"],
-        [{ case: { ...value, revision: 4 }, status: "approved" }],
-      );
+      client.setQueryData(api.key("cases"), [
+        { case: { ...value, revision: 4 }, status: "approved" },
+      ]);
     });
     await waitFor(() =>
       expect(screen.getByLabelText(/Reviewable case/)).not.toBeChecked(),
@@ -298,10 +305,20 @@ describe("review and execution boundaries", () => {
     const cases = vi
       .spyOn(api, "cases")
       .mockResolvedValueOnce([
-        { case: { ...value, revision: 3 }, status: "approved", reviewer: null, reason: null },
+        {
+          case: { ...value, revision: 3 },
+          status: "approved",
+          reviewer: null,
+          reason: null,
+        },
       ])
       .mockResolvedValue([
-        { case: { ...value, revision: 4 }, status: "approved", reviewer: null, reason: null },
+        {
+          case: { ...value, revision: 4 },
+          status: "approved",
+          reviewer: null,
+          reason: null,
+        },
       ]);
     const create = vi
       .spyOn(api, "createRelease")
@@ -344,9 +361,13 @@ describe("review and execution boundaries", () => {
     "blocks %s chat sessions and directs recovery to a new session",
     async (status) => {
       const session = {
+        ...execution,
         id: "session-one",
         title: "Failed investigation",
         agent_revision: "fixed" as const,
+        agent_revision_id: "synthetic-fixed",
+        legacy: true,
+        spec_hash: null,
         mode: "mock" as const,
         created_at: "2026-09-08",
         status,
@@ -356,6 +377,7 @@ describe("review and execution boundaries", () => {
         tool_calls: [],
       };
       vi.spyOn(api, "sessions").mockResolvedValue([session]);
+      mockRegistry();
       vi.spyOn(api, "session").mockResolvedValue(session);
       const send = vi.spyOn(api, "sendMessage");
       renderWithClient(<Playground />, "/playground?session=session-one");
@@ -364,6 +386,8 @@ describe("review and execution boundaries", () => {
       ).toBeVisible();
       expect(screen.getByLabelText("Your next turn")).toBeDisabled();
       expect(screen.getByText("incomplete")).toBeVisible();
+      expect(screen.getByText("Unavailable for this historical execution")).toBeVisible();
+      expect(screen.getByText(/Legacy compatibility record; original evidence retains/)).toHaveTextContent("fixed");
       expect(
         screen.getByRole("button", { name: "Send message" }),
       ).toBeDisabled();
@@ -374,6 +398,7 @@ describe("review and execution boundaries", () => {
         screen.getByLabelText("Your next turn").closest("form")!,
       );
       expect(send).not.toHaveBeenCalled();
+      const discard = vi.spyOn(window, "confirm").mockReturnValue(true);
       await userEvent.click(
         screen.getByRole("button", { name: "Start a new session" }),
       );
@@ -382,8 +407,9 @@ describe("review and execution boundaries", () => {
       ).toBeVisible();
       expect(
         screen.getByRole("button", { name: "Create session" }),
-      ).toBeEnabled();
+      ).toBeDisabled();
       expect(screen.queryByLabelText("Your next turn")).not.toBeInTheDocument();
+      expect(discard).toHaveBeenCalledOnce();
     },
   );
 });

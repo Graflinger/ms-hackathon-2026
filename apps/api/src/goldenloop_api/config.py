@@ -1,4 +1,7 @@
+import json
 import os
+import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +37,9 @@ class SanitizationError(ValueError):
     pass
 
 
+invocation_secrets: ContextVar[tuple[str, ...]] = ContextVar("invocation_secrets", default=())
+
+
 def clean(value):
     # Include configured credentials even when their value lacks a recognizable prefix.
     secrets = tuple(
@@ -45,6 +51,20 @@ def clean(value):
             for part in ("API_KEY", "SECRET", "PASSWORD", "ACCESS_TOKEN", "CONNECTION_STRING")
         )
     )
+    # Binding names may point to opaque env names that do not contain API_KEY/SECRET.
+    try:
+        raw = os.environ.get("GOLDENLOOP_CONNECTION_BINDINGS", "{}")
+        bindings = json.loads(raw) if len(raw) <= 1024 * 1024 else {}
+        if isinstance(bindings, dict):
+            for entry in bindings.values():
+                key_env = entry.get("key_env") if isinstance(entry, dict) else None
+                if isinstance(key_env, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_env):
+                    key = os.environ.get(key_env)
+                    if key:
+                        secrets += (key,)
+    except ValueError:
+        pass
+    secrets += invocation_secrets.get()
     try:
         return sanitize(value, secrets=secrets)
     except ValueError:

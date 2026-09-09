@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { AlertCircle, ArrowRight, LoaderCircle, RefreshCw } from "lucide-react";
-import { Link } from "react-router-dom";
+import { ProjectLink as Link } from "./project";
 
 export function PageHeader({
   eyebrow,

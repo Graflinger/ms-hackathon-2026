@@ -5,14 +5,15 @@ import {
   type FormEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
-import { Check, Code2, Plus, Search, X } from "lucide-react";
 import {
-  api,
-  type CaseRecord,
-  type CanonicalCase,
-  type Feedback,
-} from "../api";
+  useProjectApi,
+  useProject,
+  useDirty,
+  useInstanceGuard,
+  useProjectSearchParams as useSearchParams,
+} from "../project";
+import { Check, Code2, Plus, Search, X } from "lucide-react";
+import { type CaseRecord, type CanonicalCase, type Feedback } from "../api";
 import {
   blankCanonical,
   buildCase,
@@ -41,6 +42,9 @@ export function CaseEditor({
   onSaved: (record: CaseRecord) => void;
   onClose: () => void;
 }) {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
+  const captureInstance = useInstanceGuard();
   const client = useQueryClient();
   const [advanced, setAdvanced] = useState(!!record);
   const [fields, setFields] = useState<SimpleCaseFields>(emptyFields);
@@ -50,7 +54,12 @@ export function CaseEditor({
   const [reason, setReason] = useState("");
   const [formError, setFormError] = useState<Error | null>(null);
   const save = useMutation({
-    mutationFn: (value: CanonicalCase) =>
+    mutationFn: ({
+      value,
+    }: {
+      value: CanonicalCase;
+      isCurrent: () => boolean;
+    }) =>
       record?.case.id
         ? api.updateCase(
             record.case.id,
@@ -59,15 +68,19 @@ export function CaseEditor({
             reason.trim(),
           )
         : api.createCase(value, reason.trim() || undefined),
-    onSuccess: (saved) => {
-      client.invalidateQueries({ queryKey: ["cases"] });
-      client.invalidateQueries({ queryKey: ["case", saved.case.id] });
-      client.invalidateQueries({ queryKey: ["summary"] });
-      onSaved(saved);
+    onSuccess: (saved, { isCurrent }) => {
+      client.invalidateQueries({ queryKey: api.key("cases") });
+      client.invalidateQueries({ queryKey: api.key("case", saved.case.id) });
+      client.invalidateQueries({ queryKey: api.key("summary") });
+      if (isCurrent()) {
+        clearDirty();
+        onSaved(saved);
+      }
     },
   });
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (writeBlocked || save.isPending) return;
     setFormError(null);
     try {
       const value = advanced ? parseCase(text) : buildCase(fields);
@@ -80,7 +93,7 @@ export function CaseEditor({
         throw new Error(
           "Keep the existing case ID and revision, and give a reason. The server creates the new revision.",
         );
-      save.mutate(value);
+      save.mutate({ value, isCurrent: captureInstance() });
     } catch (error) {
       setFormError(error as Error);
     }
@@ -96,6 +109,12 @@ export function CaseEditor({
   }
   const field = (name: keyof SimpleCaseFields, value: string) =>
     setFields((previous) => ({ ...previous, [name]: value }));
+  const clearDirty = useDirty(
+    !save.isSuccess &&
+      (!!reason ||
+        JSON.stringify(fields) !== JSON.stringify(emptyFields) ||
+        text !== JSON.stringify(record?.case ?? blankCanonical, null, 2)),
+  );
   return (
     <section className="panel editor-panel">
       <SectionHeading
@@ -312,7 +331,7 @@ export function CaseEditor({
           <ErrorState error={formError || save.error} />
         )}
         <div className="form-actions">
-          <button className="button" disabled={save.isPending}>
+          <button className="button" disabled={writeBlocked || save.isPending}>
             {save.isPending
               ? "Saving..."
               : record
@@ -336,28 +355,36 @@ function CaseReview({
   caseId: string;
   onEdit: (record: CaseRecord) => void;
 }) {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [reason, setReason] = useState("");
-  const [confirmedRevision, setConfirmedRevision] = useState<number | null>(null);
+  const [confirmedRevision, setConfirmedRevision] = useState<number | null>(
+    null,
+  );
   const detail = useQuery({
-    queryKey: ["case", caseId],
+    queryKey: api.key("case", caseId),
     queryFn: ({ signal }) => api.case(caseId, signal),
   });
   const approve = useMutation({
     mutationFn: () => {
+      if (writeBlocked) throw new Error("Project writes are disabled.");
       if (confirmedRevision !== detail.data?.case.revision || !reason.trim()) {
-        throw new Error("Review and confirm the current case revision before approval.");
+        throw new Error(
+          "Review and confirm the current case revision before approval.",
+        );
       }
       return api.approve(caseId, confirmedRevision, reason.trim());
     },
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["case", caseId] });
-      client.invalidateQueries({ queryKey: ["cases"] });
-      client.invalidateQueries({ queryKey: ["summary"] });
+      client.invalidateQueries({ queryKey: api.key("case", caseId) });
+      client.invalidateQueries({ queryKey: api.key("cases") });
+      client.invalidateQueries({ queryKey: api.key("summary") });
       setReason("");
       setConfirmedRevision(null);
     },
   });
+  useDirty(!!reason || confirmedRevision !== null);
   if (detail.isPending) return <Loading />;
   if (detail.isError)
     return <ErrorState error={detail.error} retry={() => detail.refetch()} />;
@@ -370,6 +397,7 @@ function CaseReview({
         action={
           <button
             className="button small secondary"
+            disabled={writeBlocked}
             onClick={() => onEdit(record)}
           >
             Edit as new revision
@@ -457,7 +485,11 @@ function CaseReview({
               <input
                 type="checkbox"
                 checked={confirmedRevision === record.case.revision}
-                onChange={(event) => setConfirmedRevision(event.target.checked ? record.case.revision : null)}
+                onChange={(event) =>
+                  setConfirmedRevision(
+                    event.target.checked ? record.case.revision : null,
+                  )
+                }
                 required
               />
               I reviewed the inputs, references, and check expectations.
@@ -465,7 +497,13 @@ function CaseReview({
             {approve.error && <ErrorState error={approve.error} />}
             <button
               className="button align-start"
-              disabled={approve.isPending || confirmedRevision !== record.case.revision || !reason.trim() || detail.isFetching}
+              disabled={
+                writeBlocked ||
+                approve.isPending ||
+                confirmedRevision !== record.case.revision ||
+                !reason.trim() ||
+                detail.isFetching
+              }
             >
               <Check size={16} />
               {approve.isPending
@@ -485,16 +523,19 @@ function CaseReview({
 }
 
 function FeedbackReview({ feedback }: { feedback: Feedback }) {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [status, setStatus] = useState<"accepted" | "rejected" | "unresolved">(
     feedback.status || "unresolved",
   );
   const [reason, setReason] = useState("");
   const [notice, setNotice] = useState("");
+  useDirty(!!reason);
   const review = useMutation({
     mutationFn: () => api.reviewFeedback(feedback.id, status, reason.trim()),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["feedback"] });
+      client.invalidateQueries({ queryKey: api.key("feedback") });
       setNotice(
         "Feedback review saved. Case approval remains a separate action.",
       );
@@ -503,8 +544,8 @@ function FeedbackReview({ feedback }: { feedback: Feedback }) {
   const candidate = useMutation({
     mutationFn: () => api.feedbackCandidate(feedback.id),
     onSuccess: (record) => {
-      client.invalidateQueries({ queryKey: ["cases"] });
-      client.invalidateQueries({ queryKey: ["summary"] });
+      client.invalidateQueries({ queryKey: api.key("cases") });
+      client.invalidateQueries({ queryKey: api.key("summary") });
       setNotice(
         `Candidate created: ${record.case.title}. Open Candidates to author and review its expectations.`,
       );
@@ -571,14 +612,16 @@ function FeedbackReview({ feedback }: { feedback: Feedback }) {
           <div className="form-actions">
             <button
               className="button secondary"
-              disabled={review.isPending || !reason.trim()}
+              disabled={writeBlocked || review.isPending || !reason.trim()}
             >
               {review.isPending ? "Saving..." : "Save feedback review"}
             </button>
             <button
               type="button"
               className="button"
-              disabled={candidate.isPending || candidate.isSuccess}
+              disabled={
+                writeBlocked || candidate.isPending || candidate.isSuccess
+              }
               onClick={() => candidate.mutate()}
             >
               {candidate.isPending
@@ -603,6 +646,8 @@ function FeedbackReview({ feedback }: { feedback: Feedback }) {
 }
 
 export default function Candidates() {
+  const api = useProjectApi();
+  const { writeBlocked } = useProject();
   const [params, setParams] = useSearchParams();
   const feedbackTab = params.get("tab") === "feedback";
   const selected = params.get("case");
@@ -612,11 +657,11 @@ export default function Candidates() {
   const [editor, setEditor] = useState<CaseRecord | "new" | null>(null);
   const [notice, setNotice] = useState("");
   const cases = useQuery({
-    queryKey: ["cases"],
+    queryKey: api.key("cases"),
     queryFn: ({ signal }) => api.cases(signal),
   });
   const feedback = useQuery({
-    queryKey: ["feedback"],
+    queryKey: api.key("feedback"),
     queryFn: ({ signal }) => api.feedback(signal),
     enabled: feedbackTab,
   });
@@ -637,6 +682,7 @@ export default function Candidates() {
         action={
           <button
             className="button"
+            disabled={writeBlocked}
             onClick={() => {
               setEditor("new");
               setNotice("");

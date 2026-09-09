@@ -181,13 +181,13 @@ def azure_judge(app, monkeypatch):
     def close():
         state["closed"] += 1
 
-    def factory():
+    def factory(**_snapshot):
         transport = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=create)), close=close
         )
         return OpenAIJudge(transport, model="judge-deployment", provider="azure-openai")
 
-    monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure_env", factory)
+    monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure", factory)
     return state
 
 
@@ -342,10 +342,10 @@ async def test_judge_cancel_records_immediately_and_closes_after_inflight_call(
     client, app, case_payload, azure_judge, monkeypatch
 ):
     entered, finish = threading.Event(), threading.Event()
-    factory = OpenAIJudge.from_azure_env
+    factory = OpenAIJudge.from_azure
 
-    def slow_factory():
-        judge = factory()
+    def slow_factory(**snapshot):
+        judge = factory(**snapshot)
         create = judge.client.chat.completions.create
 
         def slow(**kwargs):
@@ -357,7 +357,7 @@ async def test_judge_cancel_records_immediately_and_closes_after_inflight_call(
         judge.client.chat.completions.create = slow
         return judge
 
-    monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure_env", slow_factory)
+    monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure", slow_factory)
     case_payload["checks"].append({"kind": "judge", "config": {"rubric": "Second check", "threshold": 0.5}})
     _, release = await judged_release(client, case_payload)
     response = await client.post(
@@ -394,10 +394,10 @@ async def test_judge_deadline_stops_later_checks_and_releases_client(
     client, app, case_payload, azure_judge, monkeypatch
 ):
     object.__setattr__(app.state.settings, "run_timeout", 0.1)
-    factory = OpenAIJudge.from_azure_env
+    factory = OpenAIJudge.from_azure
 
-    def slow_factory():
-        judge = factory()
+    def slow_factory(**snapshot):
+        judge = factory(**snapshot)
         create = judge.client.chat.completions.create
 
         def slow(**kwargs):
@@ -407,7 +407,7 @@ async def test_judge_deadline_stops_later_checks_and_releases_client(
         judge.client.chat.completions.create = slow
         return judge
 
-    monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure_env", slow_factory)
+    monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure", slow_factory)
     case_payload["checks"].append({"kind": "judge", "config": {"rubric": "Second check", "threshold": 0.5}})
     _, release = await judged_release(client, case_payload)
     response = await client.post(

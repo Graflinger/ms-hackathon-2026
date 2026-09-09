@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Local synthetic GoldenLoop evaluation workbench API"
 requires-python = ">=3.12"
 dependencies = [
-  "goldenloop-eval==0.1.0",
-  "goldenloop-demo-agent==0.1.0",
+  "goldenloop-eval==0.2.0",
+  "goldenloop-demo-agent==0.2.0",
   "fastapi>=0.115,<1",
   "uvicorn>=0.34,<1",
   "sqlalchemy[asyncio]>=2.0.38,<3",

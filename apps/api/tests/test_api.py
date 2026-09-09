@@ -26,7 +26,7 @@ async def test_health_summary_and_openapi(client):
     assert (await client.get("/api/v1/health")).json() == {
         "status": "ok",
         "mode": "local-synthetic",
-        "sdk_version": "0.1.0",
+        "sdk_version": "0.2.0",
     }
     assert (await client.get("/api/v1/summary")).json() == {
         "candidates": 0,
@@ -92,7 +92,7 @@ async def test_bootstrap_required_and_idempotent(settings):
             assert await session.scalar(text("PRAGMA foreign_keys")) == 1
             assert await session.scalar(text("PRAGMA busy_timeout")) == 5000
             assert (await session.scalar(text("PRAGMA journal_mode"))).upper() == journal_mode()
-            assert await session.scalar(text("SELECT version_num FROM alembic_version")) == "0001"
+            assert await session.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
     finally:
         await db.engine.dispose()
 

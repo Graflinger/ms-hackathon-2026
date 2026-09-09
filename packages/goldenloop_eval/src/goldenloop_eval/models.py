@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SDK_VERSION = "0.1.0"
+SDK_VERSION = "0.2.0"
 Mode = Literal["mock", "live", "recorded"]
 
 
@@ -105,7 +105,7 @@ class JudgeVerdict(Model):
 
 class BundleManifest(Model):
     schema_version: Literal["1"]
-    sdk_version: Literal["0.1.0"]
+    sdk_version: Literal["0.1.0", "0.2.0"]
     release_id: str = Field(min_length=1)
     content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     cases_file: Literal["cases.json"]

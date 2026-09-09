@@ -1,9 +1,47 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, request } from "../api";
+import { createProjectApi, request } from "../api";
+const api = createProjectApi("synthetic-demo");
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("API boundary", () => {
+  it("blocks new writes with unknown metadata but permits history, cancellation and export", async () => {
+    let writable = false;
+    const scoped = createProjectApi("synthetic-demo", () => writable);
+    const fetcher = vi.fn().mockImplementation(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(scoped.createAgent({ name: "Blocked" })).rejects.toThrow("Project writes are disabled");
+    await expect(scoped.createSession("Blocked", "synthetic-fixed")).rejects.toThrow("Project writes are disabled");
+    expect(fetcher).not.toHaveBeenCalled();
+    await scoped.cases();
+    await scoped.cancelRun("run-one");
+    await scoped.exportBundle("release-one", "synthetic-fixed", "mock", "none");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    writable = true;
+    await scoped.createAgent({ name: "Recovered" });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+  it("downloads configured v2 bundles as binary without implicit execution defaults", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response("zip-content", {
+          headers: { "Content-Type": "application/zip" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const blob = await api.exportBundle(
+      "release/one",
+      "synthetic-fixed",
+      "mock",
+      "none",
+    );
+    expect(await blob.text()).toBe("zip-content");
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/v2/projects/synthetic-demo/dataset-releases/release%2Fone/export?agent_revision_id=synthetic-fixed&mode=mock&judge=none",
+      expect.any(Object),
+    );
+  });
   it.each([
     { mode: "mock" as const, judge: undefined, expected: "none" },
     { mode: "mock" as const, judge: "azure" as const, expected: "azure" },
@@ -13,14 +51,20 @@ describe("API boundary", () => {
     async ({ mode, judge, expected }) => {
       const fetcher = vi.fn().mockResolvedValue(new Response("{}"));
       vi.stubGlobal("fetch", fetcher);
-      await api.startRun("release-one", "fixed", mode, "request-key", judge);
+      await api.startRun(
+        "release-one",
+        "synthetic-fixed",
+        mode,
+        "request-key",
+        judge,
+      );
       expect(fetcher).toHaveBeenCalledWith(
-        "/api/v1/evaluation-runs",
+        "/api/v2/projects/synthetic-demo/evaluation-runs",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
             release_id: "release-one",
-            agent_revision: "fixed",
+            agent_revision_id: "synthetic-fixed",
             mode,
             idempotency_key: "request-key",
             judge: expected,
@@ -37,7 +81,7 @@ describe("API boundary", () => {
       "case-b": 7,
     });
     expect(fetcher).toHaveBeenCalledWith(
-      "/api/v1/dataset-releases",
+      "/api/v2/projects/synthetic-demo/dataset-releases",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
@@ -48,7 +92,7 @@ describe("API boundary", () => {
       }),
     );
   });
-  it("preserves the /api/v1 prefix and serializes explicit approval", async () => {
+  it("scopes the v2 prefix and serializes explicit approval", async () => {
     const fetcher = vi
       .fn()
       .mockResolvedValue(
@@ -57,7 +101,7 @@ describe("API boundary", () => {
     vi.stubGlobal("fetch", fetcher);
     await api.approve("case/id", 3, "Reviewed expectations");
     expect(fetcher).toHaveBeenCalledWith(
-      "/api/v1/cases/case%2Fid/approve",
+      "/api/v2/projects/synthetic-demo/cases/case%2Fid/approve",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ revision: 3, reason: "Reviewed expectations" }),

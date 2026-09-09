@@ -117,16 +117,69 @@ def _path(arguments: dict, path: str) -> Any:
     return value
 
 
-def _run_check(case: Case, observation: Observation, check: Check, judge: Judge | None):
+def validate_case_checks(case: Case, *, judge_available: bool) -> None:
+    """Validate the complete check configuration without execution or provider calls."""
+    if not any(check.required for check in case.checks):
+        raise ValueError("Case has no required actionable expectations")
+    for check in case.checks:
+        _check_config(case, check)
+        if check.required and check.kind == "judge" and not judge_available:
+            raise ValueError("Required judge provider is not configured")
+
+
+def _check_config(case: Case, check: Check):
     if check.turn is not None and check.turn >= len(case.turns):
         raise ValueError("Check turn is outside the case")
+    kind = check.kind
+    if kind in {"content_contains", "content_excludes", "exact_match"}:
+        return ContentConfig.model_validate(check.config)
+    if kind == "json_schema":
+        config = SchemaConfig.model_validate(check.config)
+        schema_validator(config.json_schema)
+    elif kind in {"tool_required", "tool_forbidden"}:
+        config = ToolConfig.model_validate(check.config)
+        if kind == "tool_required" and config.max is not None and config.max < config.min:
+            raise ValueError("Tool maximum must be at least minimum")
+        if kind == "tool_required" and config.min == 0:
+            raise ValueError("tool_required minimum must be positive")
+        if kind == "tool_forbidden" and (config.min != 1 or config.max not in {None, 0}):
+            raise ValueError("tool_forbidden does not accept nonzero occurrence bounds")
+    elif kind == "tool_arguments":
+        config = ArgumentConfig.model_validate(check.config)
+        if config.operator == "type":
+            if config.value not in ("string", "integer", "number", "boolean", "null", "array", "object"):
+                raise ValueError("Unsupported JSON type")
+        elif config.operator == "schema":
+            if not isinstance(config.value, dict):
+                raise ValueError("schema assertion value must be an object")
+            schema_validator(config.value)
+        elif config.operator == "range":
+            bounds = config.value
+            if (not isinstance(bounds, dict) or not bounds or set(bounds) - {"min", "max"}
+                or any(type(v) not in {int, float} or not math.isfinite(v) for v in bounds.values())
+                or bounds.get("min", -math.inf) > bounds.get("max", math.inf)):
+                raise ValueError("range value must contain valid inclusive min/max bounds")
+        elif config.operator not in {"equals", "subset"}:
+            raise ValueError("Unsupported argument operator")
+    elif kind == "tool_order":
+        config = OrderConfig.model_validate(check.config)
+        if any(not name for name in config.tools):
+            raise ValueError("Tool order names cannot be empty")
+    elif kind == "judge":
+        config = JudgeConfig.model_validate(check.config)
+    else:
+        raise ValueError("Unsupported check kind")
+    return config
+
+
+def _run_check(case: Case, observation: Observation, check: Check, judge: Judge | None):
+    config = _check_config(case, check)
     turns = list(range(len(case.turns))) if check.turn is None else [check.turn]
     # Unscoped content assertions apply independently to every scripted answer.
     answers = [_last_answer(observation, turn) for turn in turns]
     kind = check.kind
     evidence: Any = {"turns": turns, "answers": answers}
     if kind in {"content_contains", "content_excludes", "exact_match"}:
-        config = ContentConfig.model_validate(check.config)
         if kind == "content_contains":
             passed = all(config.value in answer for answer in answers)
         elif kind == "content_excludes":
@@ -134,7 +187,6 @@ def _run_check(case: Case, observation: Observation, check: Check, judge: Judge 
         else:
             passed = all(config.value == answer for answer in answers)
     elif kind == "json_schema":
-        config = SchemaConfig.model_validate(check.config)
         validator = schema_validator(config.json_schema)
         if any(len(answer) > 262144 for answer in answers):
             raise ValueError("JSON answer exceeds size limit")
@@ -149,41 +201,21 @@ def _run_check(case: Case, observation: Observation, check: Check, judge: Judge 
             raise ValueError("Required tool telemetry is incomplete")
         calls = [call for call in observation.tool_calls if call.turn in turns]
         if kind in {"tool_required", "tool_forbidden"}:
-            config = ToolConfig.model_validate(check.config)
-            if kind == "tool_required" and config.max is not None and config.max < config.min:
-                raise ValueError("Tool maximum must be at least minimum")
-            if kind == "tool_required" and config.min == 0:
-                raise ValueError("tool_required minimum must be positive")
-            if kind == "tool_forbidden" and ({"min", "max"} & check.config.keys()):
-                # Default min=1 is accepted as emitted by the shared contract.
-                if config.min != 1 or config.max not in {None, 0}:
-                    raise ValueError("tool_forbidden does not accept nonzero occurrence bounds")
             names = {config.tool, *config.alternatives}
             matched = [call for call in calls if call.tool in names]
             passed = (len(matched) == 0 if kind == "tool_forbidden" else
                       len(matched) >= config.min and (config.max is None or len(matched) <= config.max))
             evidence = {"count": len(matched), "calls": [c.model_dump(mode="json") for c in matched]}
         elif kind == "tool_arguments":
-            config = ArgumentConfig.model_validate(check.config)
             matched = [call for call in calls if call.tool in {config.tool, *config.alternatives}]
             operator = config.operator
             validator = None
             if operator == "type":
-                if config.value not in ("string", "integer", "number", "boolean", "null", "array", "object"):
-                    raise ValueError("Unsupported JSON type")
                 validator = schema_validator({"type": config.value})
             elif operator == "schema":
-                if not isinstance(config.value, dict):
-                    raise ValueError("schema assertion value must be an object")
                 validator = schema_validator(config.value)
             elif operator == "range":
                 bounds = config.value
-                if (not isinstance(bounds, dict) or not bounds or set(bounds) - {"min", "max"}
-                    or any(type(v) not in {int, float} or not math.isfinite(v) for v in bounds.values())
-                    or bounds.get("min", -math.inf) > bounds.get("max", math.inf)):
-                    raise ValueError("range value must contain valid inclusive min/max bounds")
-            elif operator not in {"equals", "subset"}:
-                raise ValueError("Unsupported argument operator")
             outcomes = []
             for call in matched:
                 try:
@@ -204,9 +236,6 @@ def _run_check(case: Case, observation: Observation, check: Check, judge: Judge 
             passed = bool(matched) and all(outcomes)
             evidence = {"calls": [c.model_dump(mode="json") for c in matched], "matches": outcomes}
         elif kind == "tool_order":
-            config = OrderConfig.model_validate(check.config)
-            if any(not name for name in config.tools):
-                raise ValueError("Tool order names cannot be empty")
             # Ordered subsequence: unrelated/alternative intermediate calls are allowed.
             cursor = 0
             for call in calls:
@@ -219,7 +248,6 @@ def _run_check(case: Case, observation: Observation, check: Check, judge: Judge 
         else:
             raise ValueError("Unsupported check kind")
     elif kind == "judge":
-        config = JudgeConfig.model_validate(check.config)
         if judge is None:
             raise ValueError("Judge provider is not configured")
         safe_case = Case.model_validate(sanitize(case.model_dump(mode="json")))
@@ -238,8 +266,19 @@ def _run_check(case: Case, observation: Observation, check: Check, judge: Judge 
     return "pass" if passed else "fail", "Constraint satisfied" if passed else "Constraint not satisfied", evidence, None
 
 
-def evaluate(case: Case, observation: Observation, judge: Judge | None = None) -> Evaluation:
+def evaluate(case: Case, observation: Observation, judge: Judge | None = None, *,
+             secrets: tuple[str, ...] = ()) -> Evaluation:
     """Score an observation without invoking the agent; required checks fail closed."""
+    secrets = (*secrets, *getattr(judge, "secrets", ()))
+    if secrets:
+        try:
+            case = Case.model_validate(sanitize(case.model_dump(mode="json"), secrets=secrets))
+            observation = Observation.model_validate(sanitize(observation.model_dump(mode="json"), secrets=secrets))
+        except ValueError:
+            return Evaluation(case_id=sanitize(case.id, secrets=secrets), case_revision=case.revision,
+                              agent_revision=sanitize(observation.agent_revision, secrets=secrets),
+                              mode=observation.mode, gate="error", checks=[CheckResult(
+                                  id="__execution__", kind="execution", status="error", reason="Unsafe evaluation data")])
     execution_errors = []
     if (case.id, case.revision) != (observation.case_id, observation.case_revision):
         execution_errors.append("Observation case identity/revision mismatch")
@@ -272,14 +311,14 @@ def evaluate(case: Case, observation: Observation, judge: Judge | None = None) -
         else:
             try:
                 status, reason, evidence, score = _run_check(case, observation, check, judge)
-                evidence = sanitize(evidence)
+                evidence = sanitize(evidence, secrets=secrets)
             except Exception as exc:
                 # Never persist provider exception text: it can include URLs/credentials.
                 status, reason, evidence, score = "error", f"Invalid check or evaluator failure ({type(exc).__name__})", None, None
                 if isinstance(exc, ValueError) and type(exc) is ValueError:
                     reason = str(exc)
         results.append(CheckResult(id=check.id, kind=check.kind, status=status,
-                                   reason=sanitize(reason), evidence=evidence, score=score))
+                                    reason=sanitize(reason, secrets=secrets), evidence=evidence, score=score))
     required = [result for check, result in zip(case.checks, results) if check.required]
     if execution_errors:
         results.append(CheckResult(id="__execution__", kind="execution", status="error",

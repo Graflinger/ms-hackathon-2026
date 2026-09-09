@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goldenloop-demo-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Synthetic GoldenLoop agent with deterministic and Microsoft Agent Framework adapters"
 requires-python = ">=3.12"
-dependencies = ["goldenloop-eval==0.1.0", "pydantic>=2,<3"]
+dependencies = ["goldenloop-eval==0.2.0", "pydantic>=2,<3"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
-live = ["agent-framework-core==1.17.0", "agent-framework-openai==1.14.2", "azure-identity>=1.25.3,<2"]
+live = ["agent-framework-core==1.17.0", "agent-framework-openai==1.14.2", "openai>=3.8,<4", "httpx>=0.28,<1", "azure-identity>=1.25.3,<2"]
 
 [project.scripts]
 goldenloop-demo-agent = "goldenloop_demo_agent.cli:main"
