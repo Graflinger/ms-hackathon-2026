@@ -84,7 +84,6 @@ jobs:
       UV_PYTHON: "3.12"
       GOLDENLOOP_LOCAL_DEMO: "true"
       GOLDENLOOP_ALLOW_LIVE_SYNTHETIC: "false"
-      GOLDENLOOP_DATA_DIR: ${{ runner.temp }}/goldenloop-browser
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
