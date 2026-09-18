@@ -265,6 +265,8 @@ export function createProjectApi(
       ),
     session: (sessionId: string, signal?: AbortSignal) =>
       request<Session>(`/chat-sessions/${id(sessionId)}`, { signal }),
+    sessionEventsUrl: (sessionId: string) =>
+      `${base}/chat-sessions/${id(sessionId)}/events`,
     sendMessage: (sessionId: string, content: string) =>
       request<Schemas["MessageAccepted"]>(
         `/chat-sessions/${id(sessionId)}/messages`,
@@ -292,6 +294,8 @@ export function createProjectApi(
       request<Run[]>("/evaluation-runs", { signal }),
     run: (runId: string, signal?: AbortSignal) =>
       request<RunDetail>(`/evaluation-runs/${id(runId)}`, { signal }),
+    runEventsUrl: (runId: string) =>
+      `${base}/evaluation-runs/${id(runId)}/events`,
     startRun: (
       release_id: string,
       agent_revision_id: AgentRevision,

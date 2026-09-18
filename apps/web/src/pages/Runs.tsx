@@ -6,6 +6,7 @@ import {
   useDirty,
   useProjectSearchParams as useSearchParams,
 } from "../project";
+import { useEventRefresh } from "../event-stream";
 import { AgentSelector, ExecutionIdentity } from "../agent-selector";
 import { GitCompareArrows, Play, Square } from "lucide-react";
 import {
@@ -205,12 +206,22 @@ function Comparison({
   secondId: string;
 }) {
   const api = useProjectApi();
+  const [eventsConnected, setEventsConnected] = useState(false);
   const second = useQuery({
     queryKey: api.key("run", secondId),
     queryFn: ({ signal }) => api.run(secondId, signal),
     refetchInterval: (query) =>
-      query.state.data && isActiveRun(query.state.data) ? 2000 : false,
+      !eventsConnected && query.state.data && isActiveRun(query.state.data)
+        ? 2000
+        : false,
   });
+  useEventRefresh(
+    second.data && isActiveRun(second.data)
+      ? api.runEventsUrl(secondId)
+      : null,
+    api.key("run", secondId),
+    setEventsConnected,
+  );
   if (second.isPending) return <Loading label="Loading comparison run..." />;
   if (second.isError)
     return <ErrorState error={second.error} retry={() => second.refetch()} />;
@@ -410,12 +421,22 @@ function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
   const client = useQueryClient();
   const [compareId, setCompareId] = useState("");
   const [cancelConfirmed, setCancelConfirmed] = useState(false);
+  const [eventsConnected, setEventsConnected] = useState(false);
   const detail = useQuery({
     queryKey: api.key("run", runId),
     queryFn: ({ signal }) => api.run(runId, signal),
     refetchInterval: (query) =>
-      query.state.data && isActiveRun(query.state.data) ? 2000 : false,
+      !eventsConnected && query.state.data && isActiveRun(query.state.data)
+        ? 2000
+        : false,
   });
+  useEventRefresh(
+    detail.data && isActiveRun(detail.data)
+      ? api.runEventsUrl(runId)
+      : null,
+    api.key("run", runId),
+    setEventsConnected,
+  );
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(runId),
     onSuccess: () => {
