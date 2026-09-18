@@ -5,6 +5,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SDK_VERSION = "0.2.0"
 Mode = Literal["mock", "live", "recorded"]
+DatasetSplit = Literal["development", "validation", "test"]
+DATASET_SPLITS = ("development", "validation", "test")
+SPLIT_TAG_PREFIX = "split:"
 
 
 def new_id() -> str:
@@ -44,7 +47,19 @@ class Case(Model):
         ids = [check.id for check in self.checks]
         if len(ids) != len(set(ids)) or "__execution__" in ids:
             raise ValueError("Check IDs must be unique and cannot be __execution__")
+        split_tags = [tag for tag in self.tags if tag.startswith(SPLIT_TAG_PREFIX)]
+        if len(split_tags) > 1 or (
+            split_tags and split_tags[0][len(SPLIT_TAG_PREFIX):] not in DATASET_SPLITS
+        ):
+            raise ValueError(
+                "Cases may have at most one split:development, split:validation, or split:test tag"
+            )
         return self
+
+
+def case_split(case: Case) -> DatasetSplit:
+    split_tag = next((tag for tag in case.tags if tag.startswith(SPLIT_TAG_PREFIX)), None)
+    return split_tag[len(SPLIT_TAG_PREFIX):] if split_tag else "development"
 
 
 class ToolCall(Model):

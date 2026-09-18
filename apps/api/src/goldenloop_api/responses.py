@@ -1,7 +1,7 @@
 from typing import Any, Literal
 
 from goldenloop_eval import Case, Evaluation, ToolCall
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .schemas import Revision
 
@@ -110,6 +110,17 @@ class FeedbackRecord(ResponseModel):
 
 class CaseResult(Evaluation):
     observation: dict[str, Any]
+    repetition: int = Field(default=1, ge=1)
+
+
+class RunMetrics(ResponseModel):
+    attempts: int
+    passed: int
+    failed: int
+    errors: int
+    pass_rate: float | None
+    repetitions_requested: int
+    repetitions_completed: int
 
 
 class RunRecord(ResponseModel):
@@ -127,6 +138,7 @@ class RunDetail(RunRecord):
     results: list[CaseResult]
     error: str | None
     lineage: dict[str, Any]
+    metrics: RunMetrics
 
 
 class CaseRecordV2(CaseRecord):
@@ -165,3 +177,4 @@ class RunDetailV2(RunRecordV2):
     results: list[CaseResult]
     error: str | None
     lineage: dict[str, Any]
+    metrics: RunMetrics

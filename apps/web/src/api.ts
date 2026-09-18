@@ -16,6 +16,7 @@ export type Metadata = Schemas["CreateMetadata"];
 export type MetadataPatch = Schemas["PatchMetadata"];
 export type Mode = NonNullable<CreateRun["mode"]>;
 export type Judge = NonNullable<CreateRun["judge"]>;
+export type DatasetSplit = NonNullable<CreateRun["dataset_split"]>;
 export type Health = Schemas["Health"];
 export type Summary = Schemas["Summary"];
 export type CheckKind =
@@ -302,6 +303,8 @@ export function createProjectApi(
       mode: Mode,
       idempotency_key: string,
       judge: Judge = "none",
+      dataset_split: DatasetSplit = "development",
+      repetitions = 1,
     ) =>
       request<Run>(
         "/evaluation-runs",
@@ -311,6 +314,8 @@ export function createProjectApi(
           mode,
           idempotency_key,
           judge,
+          dataset_split,
+          repetitions,
         } satisfies CreateRun),
       ),
     cancelRun: (runId: string) =>

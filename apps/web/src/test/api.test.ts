@@ -77,6 +77,8 @@ describe("API boundary", () => {
             mode,
             idempotency_key: "request-key",
             judge: expected,
+            dataset_split: "development",
+            repetitions: 1,
           }),
         }),
       );

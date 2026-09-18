@@ -1,4 +1,9 @@
-import type { CanonicalCase, Check, CheckKind } from "./api";
+import type {
+  CanonicalCase,
+  Check,
+  CheckKind,
+  DatasetSplit,
+} from "./api";
 
 export interface SimpleCaseFields {
   title: string;
@@ -10,6 +15,7 @@ export interface SimpleCaseFields {
   argumentPath: string;
   argumentValue: string;
   tags: string;
+  datasetSplit: DatasetSplit;
   context: string;
 }
 export const emptyFields: SimpleCaseFields = {
@@ -22,6 +28,7 @@ export const emptyFields: SimpleCaseFields = {
   argumentPath: "",
   argumentValue: "",
   tags: "",
+  datasetSplit: "development",
   context: "",
 };
 export const checkKinds: CheckKind[] = [
@@ -80,10 +87,15 @@ export function buildCase(fields: SimpleCaseFields): CanonicalCase {
   return {
     revision: 1,
     title: fields.title.trim(),
-    tags: fields.tags
-      .split(",")
-      .map((tag) => tag.trim())
-      .filter(Boolean),
+    tags: [
+      ...fields.tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter((tag) => tag && !tag.startsWith("split:")),
+      ...(fields.datasetSplit === "development"
+        ? []
+        : [`split:${fields.datasetSplit}`]),
+    ],
     source: { type: "manual", synthetic: true },
     context: fields.context,
     turns: [

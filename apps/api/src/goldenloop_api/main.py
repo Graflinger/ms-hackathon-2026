@@ -92,6 +92,29 @@ def run_record(row, release_name=None, detail=False):
     if detail:
         keys += ["results", "error", "lineage"]
     result = {**{key: getattr(row, key) for key in keys}, "release_name": release_name}
+    if detail:
+        gates = [item.get("gate") for item in row.results]
+        repetitions_requested = row.lineage.get("repetitions", 1)
+        selected_case_count = len(row.lineage.get("case_ids", [])) or len(
+            {(item.get("case_id"), item.get("case_revision")) for item in row.results}
+        )
+        repetition_counts = {}
+        for item in row.results:
+            repetition = item.get("repetition", 1)
+            repetition_counts[repetition] = repetition_counts.get(repetition, 0) + 1
+        attempts = len(gates)
+        passed = gates.count("pass")
+        result["metrics"] = {
+            "attempts": attempts,
+            "passed": passed,
+            "failed": gates.count("fail"),
+            "errors": gates.count("error"),
+            "pass_rate": passed / attempts if attempts else None,
+            "repetitions_requested": repetitions_requested,
+            "repetitions_completed": sum(
+                count == selected_case_count for count in repetition_counts.values()
+            ),
+        }
     if current_scope.get() and not current_scope.get().legacy:
         result.update(execution_metadata(row))
     return result
