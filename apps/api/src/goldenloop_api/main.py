@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Requ
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from goldenloop_eval import SDK_VERSION, Case, Turn, release_hash
+from goldenloop_eval.models import validate_case_split
 from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -87,7 +88,7 @@ def feedback_record(row):
     }
 
 
-def run_record(row, release_name=None, detail=False):
+def run_record(row, release_name=None, detail=False, *, release_case_count=None):
     keys = ["id", "release_id", "agent_revision", "mode", "status", "gate", "created_at"]
     if detail:
         keys += ["results", "error", "lineage"]
@@ -95,8 +96,9 @@ def run_record(row, release_name=None, detail=False):
     if detail:
         gates = [item.get("gate") for item in row.results]
         repetitions_requested = row.lineage.get("repetitions", 1)
-        selected_case_count = len(row.lineage.get("case_ids", [])) or len(
-            {(item.get("case_id"), item.get("case_revision")) for item in row.results}
+        selected_case_ids = row.lineage.get("case_ids")
+        selected_case_count = (
+            len(selected_case_ids) if selected_case_ids is not None else release_case_count
         )
         repetition_counts = {}
         for item in row.results:
@@ -150,7 +152,12 @@ def validate_case(case):
     if any(check.turn is not None and check.turn >= len(case.turns) for check in case.checks):
         raise HTTPException(422, "Check turn is outside the case")
     payload["source"] = {**payload["source"], "synthetic": True}
-    return Case.model_validate(payload)
+    case = Case.model_validate(payload)
+    try:
+        validate_case_split(case)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return case
 
 
 async def insert_case(session, case, reason):
@@ -739,7 +746,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with db.sessions() as session:
             run = await get_or_404(session, Run, run_id)
             release = await get_or_404(session, Release, run.release_id)
-            return run_record(run, release.name, True)
+            return run_record(run, release.name, True, release_case_count=release.case_count)
 
     @api.post("/evaluation-runs/{run_id}/cancel", dependencies=execute, response_model=responses.RunDetail)
     async def cancel_run(run_id: str):
@@ -749,7 +756,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 run.status, run.gate, run.error = "cancelled", "error", "Cancellation requested"
                 add_event(session, "run:" + run_id, "status", {"status": "cancelled", "gate": "error"})
             release = await get_or_404(session, Release, run.release_id)
-            result = run_record(run, release.name, True)
+            result = run_record(run, release.name, True, release_case_count=release.case_count)
         task = runner.tasks.get("run:" + run_id)
         if task and not task.done() and not task.cancelling():
             task.cancel()

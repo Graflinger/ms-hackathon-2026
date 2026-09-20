@@ -6,6 +6,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from goldenloop_eval import Case, Observation, ToolCall, case_split, evaluate
+from goldenloop_eval.models import validate_case_split
 from goldenloop_eval.schema import schema_matches, schema_validator
 
 
@@ -16,7 +17,7 @@ def test_dataset_split_tags_are_explicit_and_backward_compatible():
     assert case_split(legacy.model_copy(update={"tags": ["priority:p0", "split:test"]})) == "test"
     for tags in (["split:unknown"], ["split:test", "split:validation"]):
         with pytest.raises(ValueError, match="at most one"):
-            Case(title="Invalid", turns=[{"user": "hello"}], tags=tags)
+            validate_case_split(Case(title="Invalid", turns=[{"user": "hello"}], tags=tags))
 
 
 @pytest.mark.parametrize("schema", [

@@ -37,11 +37,8 @@ def calibration_metrics(labels: Iterable[CalibrationLabel]) -> CalibrationMetric
     actual_positive = true_positive + false_negative
     precision = true_positive / predicted_positive if predicted_positive else None
     recall = true_positive / actual_positive if actual_positive else None
-    f1 = (
-        2 * precision * recall / (precision + recall)
-        if precision is not None and recall is not None and precision + recall
-        else None
-    )
+    f1_denominator = 2 * true_positive + false_positive + false_negative
+    f1 = 2 * true_positive / f1_denominator if f1_denominator else None
     return CalibrationMetrics(
         samples=samples,
         agreements=true_positive + true_negative,

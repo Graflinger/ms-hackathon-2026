@@ -20,7 +20,7 @@ from goldenloop_eval.agents import TRUSTED_AGENT_ARTIFACT
 from sqlalchemy import select
 
 from .config import clean, invocation_secrets
-from .db import ChatSession, MessageCommand, ReleaseCase, Run, add_event
+from .db import ChatSession, MessageCommand, Release, ReleaseCase, Run, add_event
 from .judging import JudgeSnapshot, evaluate_with_judge, judge_lineage
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -143,6 +143,14 @@ class Runner:
                         )
                     ).all()
                 ]
+                release = await session.get(Release, run.release_id)
+                published_hash = run.lineage.get("release_content_hash", run.lineage["content_hash"])
+                if (
+                    release is None
+                    or release.content_hash != published_hash
+                    or release_hash(cases) != published_hash
+                ):
+                    raise ValueError("Release hash mismatch")
                 selected_case_ids = run.lineage.get("case_ids")
                 if selected_case_ids is not None:
                     selected = set(selected_case_ids)
@@ -153,7 +161,10 @@ class Runner:
                     raise ValueError("Release hash mismatch")
                 if any(clean(case.model_dump(mode="json")) != case.model_dump(mode="json") for case in cases):
                     raise ValueError("Redaction policy changed; review a new revision before execution")
-                if judge_lineage(self.settings, cases, judging.get("selection", "none")) != judging:
+                repetitions = run.lineage.get("repetitions", 1)
+                if judge_lineage(
+                    self.settings, cases, judging.get("selection", "none"), repetitions=repetitions
+                ) != judging:
                     raise ValueError("Judge configuration changed after submission")
                 judge_snapshot = None
                 if judging["configured"]:
@@ -214,7 +225,6 @@ class Runner:
             async with asyncio.timeout(self.settings.run_timeout):
                 deadline = time.monotonic() + self.settings.run_timeout
                 execution_error = False
-                repetitions = run.lineage.get("repetitions", 1)
                 for repetition in range(1, repetitions + 1):
                     for case in cases:
                         try:

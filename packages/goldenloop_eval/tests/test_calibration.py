@@ -35,3 +35,13 @@ def test_calibration_metrics_report_undefined_rates_without_denominators():
 def test_calibration_labels_reject_ambiguous_outcomes():
     with pytest.raises(ValueError):
         CalibrationLabel(human="unknown", judge="pass")
+
+
+@pytest.mark.parametrize("pairs", [
+    [("pass", "fail"), ("fail", "pass")],
+    [("pass", "fail")],
+    [("fail", "pass")],
+])
+def test_f1_is_zero_when_predictions_have_errors_but_no_true_positives(pairs):
+    result = calibration_metrics(CalibrationLabel(human=human, judge=judge) for human, judge in pairs)
+    assert result.f1 == 0.0

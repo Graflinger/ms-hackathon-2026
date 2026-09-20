@@ -6,6 +6,7 @@ from datetime import date, datetime
 from pathlib import PurePosixPath
 
 from goldenloop_eval import Case, Turn
+from goldenloop_eval.models import validate_case_split
 from openpyxl import load_workbook
 
 from .config import Settings, clean
@@ -213,7 +214,7 @@ def mapped_cases(payload: dict, mapping: dict, sheet: str | None, import_id: str
             Case(
                 **({"id": case_id} if case_id else {}),
                 title=first.get("title") or user[:200],
-                tags=list(dict.fromkeys(["synthetic", *tags])),
+                tags=["synthetic", *tags],
                 context=first.get("context", first.get("scenario", "")),
                 source={
                     "type": "import",
@@ -230,4 +231,11 @@ def mapped_cases(payload: dict, mapping: dict, sheet: str | None, import_id: str
                 ],
             )
         )
+        # Validate before deduplication so repeated reserved split tags cannot
+        # bypass the same new-write rules used by manual authoring.
+        try:
+            validate_case_split(cases[-1])
+        except ValueError as exc:
+            raise ImportError(str(exc)) from None
+        cases[-1].tags = list(dict.fromkeys(cases[-1].tags))
     return cases

@@ -20,7 +20,9 @@ class JudgeSnapshot:
     api_key: str
 
 
-def judge_lineage(settings, cases: list[Case], selection: str, *, execution: bool = True) -> dict:
+def judge_lineage(
+    settings, cases: list[Case], selection: str, *, execution: bool = True, repetitions: int = 1
+) -> dict:
     checks = [
         {
             "case_id": case.id,
@@ -69,10 +71,11 @@ def judge_lineage(settings, cases: list[Case], selection: str, *, execution: boo
         raise HTTPException(
             409, "Azure judging requires a credential-free HTTPS endpoint and goldenloop-eval[live]"
         )
-    if not checks or len(checks) > settings.max_judge_calls:
+    if not checks or len(checks) * repetitions > settings.max_judge_calls:
         raise HTTPException(
             422,
-            f"Azure judging requires 1 to {settings.max_judge_calls} explicitly configured judge checks per run",
+            f"Azure judging requires 1 to {settings.max_judge_calls} explicitly configured judge checks "
+            "per run, including repetitions",
         )
     lineage = {
         "configured": True,

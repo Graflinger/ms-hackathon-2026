@@ -429,13 +429,15 @@ def install_v2(app, legacy_router, db, settings):
             if revision.agent.archived:
                 raise HTTPException(409, "Agent is archived")
             release_case_selection = await release_cases(session, release.id)
+            if release_hash(release_case_selection) != release.content_hash:
+                raise HTTPException(409, "Release hash mismatch")
             cases = [case for case in release_case_selection if case_split(case) == body.dataset_split]
             if not cases:
                 raise HTTPException(409, f"Release has no {body.dataset_split} cases")
             spec = AgentSpec.model_validate(revision.spec)
             validate_capabilities(spec, cases, body.mode)
             execution_key(spec, project_id, body.mode, settings)
-            judging = judge_lineage(settings, cases, body.judge)
+            judging = judge_lineage(settings, cases, body.judge, repetitions=body.repetitions)
             pending = await pending_count(session, Run)
             if pending >= settings.max_pending:
                 raise HTTPException(429, "Evaluation queue capacity exceeded")
