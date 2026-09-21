@@ -34,14 +34,8 @@ try {
   const input = join(temporary, "openapi.json");
   const generated = join(temporary, "api-schema.d.ts");
   writeFileSync(input, schema);
-  // npm exec isolates the pinned generator from the application's package files.
-  const args = ["exec", "--yes", "--package=openapi-typescript@7.13.0", "--", "openapi-typescript", input, "--default-non-nullable", "false", "-o", generated];
-  if (process.platform === "win32") {
-    const npm = process.env.npm_execpath || join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
-    run(process.execPath, [npm, ...args]);
-  } else {
-    run("npm", args);
-  }
+  const cli = resolve(root, "apps/web/node_modules/openapi-typescript/bin/cli.js");
+  run(process.execPath, [cli, input, "--default-non-nullable", "false", "-o", generated]);
   const content = readFileSync(generated, "utf8").replaceAll("\r\n", "\n");
   if (check) {
     if (readFileSync(output, "utf8").replaceAll("\r\n", "\n") !== content) {

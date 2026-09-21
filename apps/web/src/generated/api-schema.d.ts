@@ -1046,6 +1046,11 @@ export interface components {
             observation: {
                 [key: string]: unknown;
             };
+            /**
+             * Repetition
+             * @default 1
+             */
+            repetition?: number;
         };
         /** ChatDetail */
         ChatDetail: {
@@ -1338,6 +1343,12 @@ export interface components {
         CreateRunV2: {
             /** Agent Revision Id */
             agent_revision_id: string;
+            /**
+             * Dataset Split
+             * @default development
+             * @enum {string}
+             */
+            dataset_split?: "development" | "validation" | "test";
             /** Idempotency Key */
             idempotency_key: string;
             /**
@@ -1353,6 +1364,11 @@ export interface components {
             mode: "mock" | "live";
             /** Release Id */
             release_id: string;
+            /**
+             * Repetitions
+             * @default 1
+             */
+            repetitions?: number;
         };
         /** EditCase */
         EditCase: {
@@ -1586,6 +1602,7 @@ export interface components {
             lineage: {
                 [key: string]: unknown;
             };
+            metrics: components["schemas"]["RunMetrics"];
             /**
              * Mode
              * @enum {string}
@@ -1626,6 +1643,7 @@ export interface components {
             lineage: {
                 [key: string]: unknown;
             };
+            metrics: components["schemas"]["RunMetrics"];
             /**
              * Mode
              * @enum {string}
@@ -1643,6 +1661,23 @@ export interface components {
             spec_hash: string | null;
             /** Status */
             status: string;
+        };
+        /** RunMetrics */
+        RunMetrics: {
+            /** Attempts */
+            attempts: number;
+            /** Errors */
+            errors: number;
+            /** Failed */
+            failed: number;
+            /** Pass Rate */
+            pass_rate: number | null;
+            /** Passed */
+            passed: number;
+            /** Repetitions Completed */
+            repetitions_completed: number;
+            /** Repetitions Requested */
+            repetitions_requested: number;
         };
         /** RunRecord */
         RunRecord: {

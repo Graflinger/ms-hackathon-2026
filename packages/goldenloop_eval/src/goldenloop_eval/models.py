@@ -1,10 +1,13 @@
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SDK_VERSION = "0.2.0"
 Mode = Literal["mock", "live", "recorded"]
+DatasetSplit = Literal["development", "validation", "test"]
+DATASET_SPLITS = ("development", "validation", "test")
+SPLIT_TAG_PREFIX = "split:"
 
 
 def new_id() -> str:
@@ -45,6 +48,28 @@ class Case(Model):
         if len(ids) != len(set(ids)) or "__execution__" in ids:
             raise ValueError("Check IDs must be unique and cannot be __execution__")
         return self
+
+
+def validate_case_split(case: Case) -> None:
+    """Enforce split tags on new writes, never when loading historical cases."""
+    split_tags = [tag for tag in case.tags if tag.startswith(SPLIT_TAG_PREFIX)]
+    if len(split_tags) > 1 or (
+        split_tags and split_tags[0][len(SPLIT_TAG_PREFIX):] not in DATASET_SPLITS
+    ):
+        raise ValueError(
+            "Cases may have at most one split:development, split:validation, or split:test tag"
+        )
+
+
+def case_split(case: Case) -> DatasetSplit:
+    """Resolve a split without changing canonical tags or excluding legacy cases."""
+    split_tags = [tag for tag in case.tags if tag.startswith(SPLIT_TAG_PREFIX)]
+    if len(split_tags) == 1:
+        split = split_tags[0][len(SPLIT_TAG_PREFIX):]
+        if split in DATASET_SPLITS:
+            return cast(DatasetSplit, split)
+    # Missing, unknown, or ambiguous historical tags belong to development.
+    return "development"
 
 
 class ToolCall(Model):

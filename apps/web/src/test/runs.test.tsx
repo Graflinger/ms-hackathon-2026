@@ -33,6 +33,15 @@ const run: RunDetail = {
   release_name: null,
   error: null,
   lineage: {},
+  metrics: {
+    attempts: 1,
+    passed: 1,
+    failed: 0,
+    errors: 0,
+    pass_rate: 1,
+    repetitions_requested: 1,
+    repetitions_completed: 1,
+  },
 };
 const judgeConsent =
   "I authorize Azure judge model usage costs, independently of agent execution costs.";
@@ -91,6 +100,8 @@ describe("judge launch controls", () => {
         "mock",
         expect.any(String),
         "azure",
+        "development",
+        1,
       ),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -132,6 +143,34 @@ describe("judge launch controls", () => {
         "live",
         expect.any(String),
         "azure",
+        "development",
+        1,
+      ),
+    );
+  });
+
+  it("submits the selected dataset split and repetition count", async () => {
+    const launch = vi.spyOn(api, "startRun").mockRejectedValue(new Error("stop"));
+    renderRuns();
+    const user = userEvent.setup();
+    await screen.findByLabelText("Golden release");
+    await user.selectOptions(screen.getByLabelText("Agent"), agent.id);
+    await screen.findByRole("option", { name: "Fixed / r2" });
+    await user.selectOptions(screen.getByLabelText("Agent revision"), revision.id);
+    await user.selectOptions(screen.getByLabelText("Dataset split"), "test");
+    const repetitions = screen.getByLabelText("Repetitions");
+    await user.clear(repetitions);
+    await user.type(repetitions, "3");
+    await user.click(screen.getByRole("button", { name: "Start evaluation" }));
+    await waitFor(() =>
+      expect(launch).toHaveBeenCalledWith(
+        release.id,
+        revision.id,
+        "mock",
+        expect.any(String),
+        "none",
+        "test",
+        3,
       ),
     );
   });
@@ -239,7 +278,7 @@ describe("per-case observation telemetry", () => {
           /No aggregate usage, judge usage, or cost is inferred/,
         ),
       ).toBeVisible();
-      expect(screen.getByText("Not reported at run level")).toBeVisible();
+      expect(screen.getByText("100% pass rate")).toBeVisible();
     },
   );
 });

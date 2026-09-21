@@ -5,6 +5,15 @@ const api = createProjectApi("synthetic-demo");
 afterEach(() => vi.unstubAllGlobals());
 
 describe("API boundary", () => {
+  it("builds encoded project-scoped event stream URLs", () => {
+    const scoped = createProjectApi("project/a");
+    expect(scoped.sessionEventsUrl("session/a")).toBe(
+      "/api/v2/projects/project%2Fa/chat-sessions/session%2Fa/events",
+    );
+    expect(scoped.runEventsUrl("run/a")).toBe(
+      "/api/v2/projects/project%2Fa/evaluation-runs/run%2Fa/events",
+    );
+  });
   it("blocks new writes with unknown metadata but permits history, cancellation and export", async () => {
     let writable = false;
     const scoped = createProjectApi("synthetic-demo", () => writable);
@@ -68,6 +77,8 @@ describe("API boundary", () => {
             mode,
             idempotency_key: "request-key",
             judge: expected,
+            dataset_split: "development",
+            repetitions: 1,
           }),
         }),
       );

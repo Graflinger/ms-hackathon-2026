@@ -152,13 +152,26 @@ export function CaseEditor({
                 />
               </label>
               <label>
-                Tags <span className="optional">optional, comma separated</span>
-                <input
-                  value={fields.tags}
-                  onChange={(event) => field("tags", event.target.value)}
-                />
+                Dataset split
+                <select
+                  value={fields.datasetSplit}
+                  onChange={(event) =>
+                    field("datasetSplit", event.target.value)
+                  }
+                >
+                  <option value="development">Development</option>
+                  <option value="validation">Validation</option>
+                  <option value="test">Held-out test</option>
+                </select>
               </label>
             </div>
+            <label>
+              Tags <span className="optional">optional, comma separated</span>
+              <input
+                value={fields.tags}
+                onChange={(event) => field("tags", event.target.value)}
+              />
+            </label>
             <label>
               User message
               <textarea

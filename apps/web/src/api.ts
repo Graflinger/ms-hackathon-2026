@@ -16,6 +16,7 @@ export type Metadata = Schemas["CreateMetadata"];
 export type MetadataPatch = Schemas["PatchMetadata"];
 export type Mode = NonNullable<CreateRun["mode"]>;
 export type Judge = NonNullable<CreateRun["judge"]>;
+export type DatasetSplit = NonNullable<CreateRun["dataset_split"]>;
 export type Health = Schemas["Health"];
 export type Summary = Schemas["Summary"];
 export type CheckKind =
@@ -265,6 +266,8 @@ export function createProjectApi(
       ),
     session: (sessionId: string, signal?: AbortSignal) =>
       request<Session>(`/chat-sessions/${id(sessionId)}`, { signal }),
+    sessionEventsUrl: (sessionId: string) =>
+      `${base}/chat-sessions/${id(sessionId)}/events`,
     sendMessage: (sessionId: string, content: string) =>
       request<Schemas["MessageAccepted"]>(
         `/chat-sessions/${id(sessionId)}/messages`,
@@ -292,12 +295,16 @@ export function createProjectApi(
       request<Run[]>("/evaluation-runs", { signal }),
     run: (runId: string, signal?: AbortSignal) =>
       request<RunDetail>(`/evaluation-runs/${id(runId)}`, { signal }),
+    runEventsUrl: (runId: string) =>
+      `${base}/evaluation-runs/${id(runId)}/events`,
     startRun: (
       release_id: string,
       agent_revision_id: AgentRevision,
       mode: Mode,
       idempotency_key: string,
       judge: Judge = "none",
+      dataset_split: DatasetSplit = "development",
+      repetitions = 1,
     ) =>
       request<Run>(
         "/evaluation-runs",
@@ -307,6 +314,8 @@ export function createProjectApi(
           mode,
           idempotency_key,
           judge,
+          dataset_split,
+          repetitions,
         } satisfies CreateRun),
       ),
     cancelRun: (runId: string) =>

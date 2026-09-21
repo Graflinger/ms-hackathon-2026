@@ -11,7 +11,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 from goldenloop_demo_agent import resolve_binding
-from goldenloop_eval import SDK_VERSION, AgentConnection, AgentSpec, Case, agent_spec_hash
+from goldenloop_eval import (
+    SDK_VERSION,
+    AgentConnection,
+    AgentSpec,
+    Case,
+    agent_spec_hash,
+    case_split,
+    release_hash,
+)
 from goldenloop_eval.agents import TRUSTED_AGENT_ARTIFACT, resource_origin
 from pydantic import Field, field_validator
 from sqlalchemy import func, select
@@ -99,6 +107,8 @@ class CreateRunV2(RequestModel):
     agent_revision_id: str
     mode: Literal["mock", "live"]
     judge: Literal["none", "azure"] = "none"
+    dataset_split: Literal["development", "validation", "test"] = "development"
+    repetitions: int = Field(default=1, ge=1, le=10, strict=True)
     idempotency_key: str = Field(min_length=1, max_length=200)
 
     _safe_key = field_validator("idempotency_key")(CreateRun.safe_key.__func__)
@@ -410,17 +420,24 @@ def install_v2(app, legacy_router, db, settings):
                     or existing.agent_revision_id != revision.id
                     or existing.mode != body.mode
                     or existing.lineage["judge"].get("selection", "none") != body.judge
+                    or existing.lineage.get("dataset_split", "development") != body.dataset_split
+                    or existing.lineage.get("repetitions", 1) != body.repetitions
                 ):
                     raise HTTPException(409, "Idempotency key reused with different parameters")
                 return run_record(existing, release.name)
             await require_active_project(session, project_id)
             if revision.agent.archived:
                 raise HTTPException(409, "Agent is archived")
-            cases = await release_cases(session, release.id)
+            release_case_selection = await release_cases(session, release.id)
+            if release_hash(release_case_selection) != release.content_hash:
+                raise HTTPException(409, "Release hash mismatch")
+            cases = [case for case in release_case_selection if case_split(case) == body.dataset_split]
+            if not cases:
+                raise HTTPException(409, f"Release has no {body.dataset_split} cases")
             spec = AgentSpec.model_validate(revision.spec)
             validate_capabilities(spec, cases, body.mode)
             execution_key(spec, project_id, body.mode, settings)
-            judging = judge_lineage(settings, cases, body.judge)
+            judging = judge_lineage(settings, cases, body.judge, repetitions=body.repetitions)
             pending = await pending_count(session, Run)
             if pending >= settings.max_pending:
                 raise HTTPException(429, "Evaluation queue capacity exceeded")
@@ -429,7 +446,11 @@ def install_v2(app, legacy_router, db, settings):
                 "schema_version": "2",
                 "project_id": project_id,
                 "release_id": release.id,
-                "content_hash": release.content_hash,
+                "release_content_hash": release.content_hash,
+                "content_hash": release_hash(cases),
+                "dataset_split": body.dataset_split,
+                "case_ids": [case.id for case in cases],
+                "repetitions": body.repetitions,
                 "agent_id": revision.agent_id,
                 "agent_revision": revision.id,
                 "agent_spec": spec.model_dump(mode="json"),

@@ -15,6 +15,73 @@ from .conftest import wait_for
 from .test_projects import DEMO, publish_v2, setup_project
 
 
+async def test_split_repetitions_preserve_attempt_evidence_and_metrics(client, case_payload):
+    path, _agent, revision = await setup_project(client, "Stability")
+    cases = []
+    for split in ("development", "test"):
+        payload = {
+            **case_payload,
+            "title": f"{split.title()} case",
+            "tags": [f"split:{split}"],
+        }
+        response = await client.post(path + "/cases", json={"case": payload})
+        assert response.status_code == 201, response.text
+        case = response.json()["case"]
+        response = await client.post(
+            path + f"/cases/{case['id']}/approve",
+            json={"revision": 1, "reason": "Reviewed split"},
+        )
+        assert response.status_code == 200, response.text
+        cases.append(case)
+    response = await client.post(
+        path + "/dataset-releases",
+        json={
+            "name": "Split release",
+            "case_ids": [case["id"] for case in cases],
+            "expected_revisions": {case["id"]: 1 for case in cases},
+        },
+    )
+    assert response.status_code == 201, response.text
+    release = response.json()
+    body = {
+        "release_id": release["id"],
+        "agent_revision_id": revision["id"],
+        "mode": "mock",
+        "dataset_split": "test",
+        "repetitions": 3,
+        "idempotency_key": "test-stability",
+    }
+    response = await client.post(path + "/evaluation-runs", json=body)
+    assert response.status_code == 202, response.text
+    result = await wait_for(client, path + "/evaluation-runs/" + response.json()["id"])
+    assert result["gate"] == "pass"
+    assert [item["case_id"] for item in result["results"]] == [cases[1]["id"]] * 3
+    assert [item["repetition"] for item in result["results"]] == [1, 2, 3]
+    assert result["lineage"]["dataset_split"] == "test"
+    assert result["lineage"]["case_ids"] == [cases[1]["id"]]
+    assert result["lineage"]["repetitions"] == 3
+    assert result["lineage"]["release_content_hash"] == release["content_hash"]
+    assert result["metrics"] == {
+        "attempts": 3,
+        "passed": 3,
+        "failed": 0,
+        "errors": 0,
+        "pass_rate": 1.0,
+        "repetitions_requested": 3,
+        "repetitions_completed": 3,
+    }
+    assert (await client.post(path + "/evaluation-runs", json=body)).json()["id"] == result["id"]
+    assert (
+        await client.post(path + "/evaluation-runs", json={**body, "repetitions": 2})
+    ).status_code == 409
+    assert (
+        await client.post(
+            path + "/evaluation-runs",
+            json={**body, "dataset_split": "validation", "idempotency_key": "empty-split"},
+        )
+    ).status_code == 409
+
+
 async def test_live_snapshots_are_project_specific_stable_and_redacted(
     client, app, case_payload, monkeypatch
 ):

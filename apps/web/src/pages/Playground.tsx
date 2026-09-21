@@ -6,6 +6,7 @@ import {
   useDirty,
   useProjectSearchParams as useSearchParams,
 } from "../project";
+import { useEventRefresh } from "../event-stream";
 import { AgentSelector, ExecutionIdentity } from "../agent-selector";
 import { Flag, MessageSquare, Plus, Send, Wrench } from "lucide-react";
 import {
@@ -217,6 +218,7 @@ function Conversation({
   const { writeBlocked } = useProject();
   const client = useQueryClient();
   const [message, setMessage] = useState("");
+  const [eventsConnected, setEventsConnected] = useState(false);
   const [waitingAfter, setWaitingAfter] = useState<number | null>(null);
   const [feedbackTarget, setFeedbackTarget] = useState<FeedbackTarget | null>(
     null,
@@ -224,7 +226,7 @@ function Conversation({
   const session = useQuery({
     queryKey: api.key("session", sessionId),
     queryFn: ({ signal }) => api.session(sessionId, signal),
-    refetchInterval: 2500,
+    refetchInterval: eventsConnected ? false : 2500,
   });
   const send = useMutation({
     mutationFn: (content: string) => api.sendMessage(sessionId, content),
@@ -254,6 +256,11 @@ function Conversation({
     );
   const serverBusy =
     !!data?.status && ["queued", "pending", "running"].includes(data.status);
+  useEventRefresh(
+    serverBusy ? api.sessionEventsUrl(sessionId) : null,
+    api.key("session", sessionId),
+    setEventsConnected,
+  );
   const waiting =
     serverBusy ||
     (!executionFailed &&

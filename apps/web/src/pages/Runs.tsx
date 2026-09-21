@@ -6,12 +6,14 @@ import {
   useDirty,
   useProjectSearchParams as useSearchParams,
 } from "../project";
+import { useEventRefresh } from "../event-stream";
 import { AgentSelector, ExecutionIdentity } from "../agent-selector";
 import { GitCompareArrows, Play, Square } from "lucide-react";
 import {
   isActiveRun,
   type Revision,
   type CaseResult,
+  type DatasetSplit,
   type Mode,
   type Judge,
   type Run,
@@ -100,8 +102,8 @@ function ResultEvidence({ result }: { result: CaseResult }) {
         <div>
           <strong>Case {result.case_id}</strong>
           <span className="cell-sub">
-            Revision {result.case_revision} / {result.checks.length} check
-            results
+            Revision {result.case_revision} / attempt {result.repetition ?? 1} /{" "}
+            {result.checks.length} check results
           </span>
         </div>
         <Status value={result.gate} />
@@ -151,6 +153,7 @@ function ResultEvidence({ result }: { result: CaseResult }) {
 }
 
 function RunSignals({ run }: { run: RunDetail }) {
+  const metrics = run.metrics;
   return (
     <>
       <div className="run-signals">
@@ -169,8 +172,19 @@ function RunSignals({ run }: { run: RunDetail }) {
           </strong>
         </div>
         <div>
-          <span className="small-label">LATENCY / USAGE</span>
-          <span className="muted">Not reported at run level</span>
+          <span className="small-label">STABILITY</span>
+          <strong>
+            {metrics?.pass_rate == null
+              ? "Not reported"
+              : `${Math.round(metrics.pass_rate * 100)}% pass rate`}
+          </strong>
+          {metrics && (
+            <span className="cell-sub">
+              {metrics.passed}/{metrics.attempts} attempts passed /{" "}
+              {metrics.repetitions_completed}/{metrics.repetitions_requested}{" "}
+              repetitions completed
+            </span>
+          )}
         </div>
       </div>
       <ExecutionIdentity value={run} />
@@ -205,12 +219,22 @@ function Comparison({
   secondId: string;
 }) {
   const api = useProjectApi();
+  const [eventsConnected, setEventsConnected] = useState(false);
   const second = useQuery({
     queryKey: api.key("run", secondId),
     queryFn: ({ signal }) => api.run(secondId, signal),
     refetchInterval: (query) =>
-      query.state.data && isActiveRun(query.state.data) ? 2000 : false,
+      !eventsConnected && query.state.data && isActiveRun(query.state.data)
+        ? 2000
+        : false,
   });
+  useEventRefresh(
+    second.data && isActiveRun(second.data)
+      ? api.runEventsUrl(secondId)
+      : null,
+    api.key("run", secondId),
+    setEventsConnected,
+  );
   if (second.isPending) return <Loading label="Loading comparison run..." />;
   if (second.isError)
     return <ErrorState error={second.error} retry={() => second.refetch()} />;
@@ -233,6 +257,8 @@ function Comparison({
       agent_spec:
         lineage.agent_spec ?? "Unavailable for this historical execution",
       judge: lineage.judge ?? "Not reported",
+      dataset_split: lineage.dataset_split ?? "development",
+      repetitions: lineage.repetitions ?? 1,
       provider_version:
         lineage.provider_version ??
         lineage.model_version ??
@@ -242,7 +268,8 @@ function Comparison({
   const keys = [
     ...new Set(
       [...(first.results ?? []), ...(other.results ?? [])].map(
-        (result) => `${result.case_id}:${result.case_revision}`,
+        (result) =>
+          `${result.case_id}:${result.case_revision}:${result.repetition ?? 1}`,
       ),
     ),
   ];
@@ -323,18 +350,19 @@ function Comparison({
               {keys.map((key) => {
                 const left = first.results?.find(
                   (result) =>
-                    `${result.case_id}:${result.case_revision}` === key,
+                    `${result.case_id}:${result.case_revision}:${result.repetition ?? 1}` === key,
                 );
                 const right = other.results?.find(
                   (result) =>
-                    `${result.case_id}:${result.case_revision}` === key,
+                    `${result.case_id}:${result.case_revision}:${result.repetition ?? 1}` === key,
                 );
                 return (
                   <tr key={key}>
                     <td>
                       <ShortId value={(left || right)!.case_id} />
                       <div className="cell-sub">
-                        r{(left || right)!.case_revision}
+                        r{(left || right)!.case_revision} / attempt{" "}
+                        {(left || right)!.repetition ?? 1}
                       </div>
                     </td>
                     {[left, right].map((result, index) => (
@@ -410,12 +438,22 @@ function RunInspector({ runId, allRuns }: { runId: string; allRuns: Run[] }) {
   const client = useQueryClient();
   const [compareId, setCompareId] = useState("");
   const [cancelConfirmed, setCancelConfirmed] = useState(false);
+  const [eventsConnected, setEventsConnected] = useState(false);
   const detail = useQuery({
     queryKey: api.key("run", runId),
     queryFn: ({ signal }) => api.run(runId, signal),
     refetchInterval: (query) =>
-      query.state.data && isActiveRun(query.state.data) ? 2000 : false,
+      !eventsConnected && query.state.data && isActiveRun(query.state.data)
+        ? 2000
+        : false,
   });
+  useEventRefresh(
+    detail.data && isActiveRun(detail.data)
+      ? api.runEventsUrl(runId)
+      : null,
+    api.key("run", runId),
+    setEventsConnected,
+  );
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(runId),
     onSuccess: () => {
@@ -555,10 +593,14 @@ export default function Runs() {
   const [mode, setMode] = useState<Mode>("mock");
   const [liveConfirmed, setLiveConfirmed] = useState(false);
   const [judge, setJudge] = useState<Judge>("none");
+  const [datasetSplit, setDatasetSplit] =
+    useState<DatasetSplit>("development");
+  const [repetitions, setRepetitions] = useState(1);
   const [judgeConfirmed, setJudgeConfirmed] = useState(false);
   const [showLaunch, setShowLaunch] = useState(!!params.get("release"));
   const clearDirty = useDirty(
-    showLaunch && (!!revision || liveConfirmed || judgeConfirmed),
+    showLaunch &&
+      (!!revision || liveConfirmed || judgeConfirmed || repetitions !== 1),
   );
   // Keep the key for an identical retry after an ambiguous network failure.
   const submission = useRef<{ signature: string; key: string } | null>(null);
@@ -590,6 +632,8 @@ export default function Runs() {
         revision: revision.id,
         mode,
         judge,
+        datasetSplit,
+        repetitions,
       });
       if (submission.current?.signature !== signature)
         submission.current = { signature, key: crypto.randomUUID() };
@@ -599,6 +643,8 @@ export default function Runs() {
         mode,
         submission.current.key,
         judge,
+        datasetSplit,
+        repetitions,
       );
     },
     onSuccess: (run) => {
@@ -727,6 +773,35 @@ export default function Runs() {
                     Live / requires backend configuration
                   </option>
                 </select>
+              </label>
+            </div>
+            <div className="form-row">
+              <label>
+                Dataset split
+                <select
+                  value={datasetSplit}
+                  disabled={launch.isPending}
+                  onChange={(event) =>
+                    setDatasetSplit(event.target.value as DatasetSplit)
+                  }
+                >
+                  <option value="development">Development</option>
+                  <option value="validation">Validation</option>
+                  <option value="test">Held-out test</option>
+                </select>
+              </label>
+              <label>
+                Repetitions
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={repetitions}
+                  disabled={launch.isPending}
+                  onChange={(event) =>
+                    setRepetitions(Number(event.target.value))
+                  }
+                />
               </label>
             </div>
             {mode === "live" ? (

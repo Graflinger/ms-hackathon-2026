@@ -20,7 +20,7 @@ from goldenloop_eval.agents import TRUSTED_AGENT_ARTIFACT
 from sqlalchemy import select
 
 from .config import clean, invocation_secrets
-from .db import ChatSession, MessageCommand, ReleaseCase, Run, add_event
+from .db import ChatSession, MessageCommand, Release, ReleaseCase, Run, add_event
 from .judging import JudgeSnapshot, evaluate_with_judge, judge_lineage
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -143,11 +143,28 @@ class Runner:
                         )
                     ).all()
                 ]
+                release = await session.get(Release, run.release_id)
+                published_hash = run.lineage.get("release_content_hash", run.lineage["content_hash"])
+                if (
+                    release is None
+                    or release.content_hash != published_hash
+                    or release_hash(cases) != published_hash
+                ):
+                    raise ValueError("Release hash mismatch")
+                selected_case_ids = run.lineage.get("case_ids")
+                if selected_case_ids is not None:
+                    selected = set(selected_case_ids)
+                    cases = [case for case in cases if case.id in selected]
+                    if [case.id for case in cases] != selected_case_ids:
+                        raise ValueError("Selected case lineage mismatch")
                 if release_hash(cases) != run.lineage["content_hash"]:
                     raise ValueError("Release hash mismatch")
                 if any(clean(case.model_dump(mode="json")) != case.model_dump(mode="json") for case in cases):
                     raise ValueError("Redaction policy changed; review a new revision before execution")
-                if judge_lineage(self.settings, cases, judging.get("selection", "none")) != judging:
+                repetitions = run.lineage.get("repetitions", 1)
+                if judge_lineage(
+                    self.settings, cases, judging.get("selection", "none"), repetitions=repetitions
+                ) != judging:
                     raise ValueError("Judge configuration changed after submission")
                 judge_snapshot = None
                 if judging["configured"]:
@@ -208,54 +225,59 @@ class Runner:
             async with asyncio.timeout(self.settings.run_timeout):
                 deadline = time.monotonic() + self.settings.run_timeout
                 execution_error = False
-                for case in cases:
-                    try:
-                        async with asyncio.timeout(self.settings.case_timeout):
-                            if legacy_connection is not None:
-                                from goldenloop_demo_agent.live import run_live
+                for repetition in range(1, repetitions + 1):
+                    for case in cases:
+                        try:
+                            async with asyncio.timeout(self.settings.case_timeout):
+                                if legacy_connection is not None:
+                                    from goldenloop_demo_agent.live import run_live
 
-                                observed = await run_live(
-                                    case, revision, connection=legacy_connection, api_key=api_key
+                                    observed = await run_live(
+                                        case, revision, connection=legacy_connection, api_key=api_key
+                                    )
+                                elif spec is not None:
+                                    observed = await run_revision(
+                                        case, revision_id=revision, spec=spec, mode=mode, api_key=api_key
+                                    )
+                                else:
+                                    observed = await run_case(case, revision=revision, mode=mode)
+                                observation = bounded_observation(
+                                    observed,
+                                    case,
+                                    revision,
+                                    mode,
                                 )
-                            elif spec is not None:
-                                observed = await run_revision(
-                                    case, revision_id=revision, spec=spec, mode=mode, api_key=api_key
-                                )
-                            else:
-                                observed = await run_case(case, revision=revision, mode=mode)
-                            observation = bounded_observation(
-                                observed,
-                                case,
-                                revision,
-                                mode,
+                        except Exception:  # noqa: BLE001 - untrusted adapter failures must become safe error observations
+                            observation = Observation(
+                                case_id=case.id,
+                                case_revision=case.revision,
+                                agent_revision=revision,
+                                mode=mode,
+                                trace_complete=False,
+                                error="Agent execution failed or exceeded its deadline",
                             )
-                    except Exception:  # noqa: BLE001 - untrusted adapter failures must become safe error observations
-                        observation = Observation(
-                            case_id=case.id,
-                            case_revision=case.revision,
-                            agent_revision=revision,
-                            mode=mode,
-                            trace_complete=False,
-                            error="Agent execution failed or exceeded its deadline",
+                        execution_error |= observation.error is not None
+                        if judging["configured"] and any(check.kind == "judge" for check in case.checks):
+                            result = await evaluate_with_judge(
+                                case, observation, judging, deadline, snapshot=judge_snapshot
+                            )
+                        else:
+                            result = await asyncio.to_thread(evaluate, case, observation)
+                        payload = clean(
+                            {
+                                **result.model_dump(mode="json"),
+                                "observation": observation.model_dump(mode="json"),
+                                "repetition": repetition,
+                            }
                         )
-                    execution_error |= observation.error is not None
-                    if judging["configured"] and any(check.kind == "judge" for check in case.checks):
-                        result = await evaluate_with_judge(
-                            case, observation, judging, deadline, snapshot=judge_snapshot
-                        )
-                    else:
-                        result = await asyncio.to_thread(evaluate, case, observation)
-                    payload = clean(
-                        {**result.model_dump(mode="json"), "observation": observation.model_dump(mode="json")}
-                    )
-                    if len(json.dumps(payload)) > 2 * 1024 * 1024:
-                        raise ValueError("Evaluation result size limit exceeded")
-                    async with self.db.write() as session:
-                        run = await session.get(Run, run_id)
-                        if run.status != "running":
-                            return
-                        run.results = [*run.results, payload]
-                        add_event(session, "run:" + run_id, "result", payload)
+                        if len(json.dumps(payload)) > 2 * 1024 * 1024:
+                            raise ValueError("Evaluation result size limit exceeded")
+                        async with self.db.write() as session:
+                            run = await session.get(Run, run_id)
+                            if run.status != "running":
+                                return
+                            run.results = [*run.results, payload]
+                            add_event(session, "run:" + run_id, "result", payload)
                 async with self.db.write() as session:
                     run = await session.get(Run, run_id)
                     if run.status != "running":

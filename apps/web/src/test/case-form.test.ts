@@ -26,6 +26,16 @@ describe("case authoring", () => {
     expect(result.checks).toEqual([]);
     expect(result.fixture_version).toBe("synthetic-v1");
   });
+  it("stores non-default dataset splits as reserved tags", () => {
+    const result = buildCase({
+      ...emptyFields,
+      title: "Held out",
+      user: "Question",
+      tags: "priority:p0, split:unknown",
+      datasetSplit: "test",
+    });
+    expect(result.tags).toEqual(["priority:p0", "split:test"]);
+  });
   it("uses zero-based turns and typed tool argument values", () => {
     const result = buildCase({
       ...emptyFields,
