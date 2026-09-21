@@ -1,0 +1,17 @@
+incident_id,category,component,symptoms,action_taken,outcome,synthetic
+CW-01,cooling_water,Intake screen,Debris reduced cooling-water flow,Operations followed site procedure and cleared the screen under isolation,Flow recovered after inspection,true
+CW-02,cooling_water,Cooling pump,Rising vibration and lower discharge pressure,Standby equipment was assessed and the affected pump isolated by authorized staff,Bearing defect confirmed during maintenance,true
+CW-03,cooling_water,Condenser,Higher condenser pressure during warm river conditions,Shift team reviewed operating limits and reduced load under approved procedure,Thermal limits maintained at reduced output,true
+CW-04,cooling_water,Cooling tower,Fan unavailable and cooling-water temperature rising,Maintenance assessed the fan while operations reviewed allowable load,Cooling margin restored after repair,true
+FG-01,fuel_gas,Gas pressure regulator,Fuel supply pressure fluctuated,Operators followed fuel-system procedures and involved the gas supplier,Regulator fault confirmed and repaired,true
+FG-02,fuel_gas,Gas detection system,Gas detector alarm near valve enclosure,Site emergency procedure was activated and authorized responders assessed the area,A leaking seal was repaired after safe isolation,true
+FG-03,fuel_gas,Fuel filter,Differential pressure increased across fuel filter,Authorized staff inspected the fuel train under isolation,Blocked filter was replaced before restart approval,true
+FG-04,fuel_gas,Gas turbine fuel system,Combustion instability accompanied fuel pressure dips,Shift supervisor followed protection procedures and requested specialist assessment,Fuel supply issue resolved before authorized restart,true
+SL-01,steam_water_leak,Feedwater valve,Visible water leakage around valve packing,Area access was controlled and maintenance assessed isolation requirements,Packing repaired during an approved outage,true
+SL-02,steam_water_leak,Steam pipe,Audible leak and local temperature increase,Personnel were kept clear and emergency response followed site procedure,Cracked joint repaired after depressurization by authorized staff,true
+SL-03,steam_water_leak,Boiler tube,Make-up water demand increased unexpectedly,Operations reviewed alarms and arranged inspection under approved shutdown procedures,Tube defect confirmed and repaired,true
+SL-04,steam_water_leak,Condensate line,Water pooling below a corroded pipe,Area was secured and authorized staff isolated the affected section,Pipe section replaced and inspected,true
+FS-01,fire_smoke,Transformer,Smoke observed near transformer housing,Site emergency response was activated and personnel moved to designated safe areas,Responders contained an electrical fault,true
+FS-02,fire_smoke,Turbine enclosure,Smoke alarm and oil odor,Emergency procedures were followed with assessment by authorized responders,Oil leak on hot insulation identified after safe access,true
+FS-03,fire_smoke,Cable tray,Smoke detected in electrical room,Access was restricted and the site emergency team notified,Damaged cable replaced after isolation and inspection,true
+FS-04,fire_smoke,Auxiliary pump motor,Motor overheating with visible smoke,Operators followed emergency procedures and kept personnel clear,Motor fault repaired before formal return-to-service approval,true

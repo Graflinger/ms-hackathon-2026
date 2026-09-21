@@ -15,6 +15,7 @@ import { createProjectApi, type Project } from "../api";
 import { blankCanonical } from "../case-form";
 import { agent, execution, project, revision } from "./project-fixtures";
 import { defaultSpec, parseAgentSpec } from "../pages/Agents";
+import { adapterContract, type SupportedAdapter } from "../agent-presets";
 
 afterEach(() => vi.unstubAllGlobals());
 const second: Project = {
@@ -112,6 +113,39 @@ async function chooseRevision() {
 }
 
 describe("project navigation and lifecycle", () => {
+  it("protects checks drafts across candidate selection and project navigation", async () => {
+    const otherCase = { ...caseRecord, case: { ...caseRecord.case, id: "case-two", title: "Other case" } };
+    const { router, fetcher } = mount(
+      `/projects/${project.id}/candidates?case=case-one`,
+      (path) => {
+        if (path.endsWith("/cases")) return [caseRecord, otherCase];
+        if (path.endsWith("/cases/case-two")) return otherCase;
+      },
+    );
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(await screen.findByRole("button", { name: "Add checks" }));
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+    fireEvent.change(screen.getByLabelText("Expected content"), { target: { value: "Draft expectation" } });
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Review Other case" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    expect(screen.getByLabelText("Expected content")).toHaveValue("Draft expectation");
+    await act(async () => { await router.navigate(`/projects/${second.id}/candidates`); });
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Expected content")).toHaveValue("Draft expectation");
+    await user.click(screen.getByRole("button", { name: "New candidate" }));
+    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("Expected content")).toHaveValue("Draft expectation");
+    confirm.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Review Other case" }));
+    await screen.findByRole("heading", { name: "Other case" });
+    expect(screen.queryByLabelText("Expected content")).not.toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+  });
+
   it("guards dirty revision query selections and Back without treating hash or query ordering as resource changes", async () => {
     const other = { ...agent, id: "other-agent", name: "Other agent" };
     const { router } = mount(
@@ -807,7 +841,8 @@ describe("registry and explicit export", () => {
       screen.getByRole("button", { name: "Start evaluation" }),
     ).toBeDisabled();
   });
-  it("creates an agent and an immutable mock revision with the approved contract", async () => {
+  it.each<SupportedAdapter>(["synthetic-customer", "synthetic-powerplant-var"])("creates an agent and an immutable mock %s revision with the approved contract", async (adapter) => {
+    const spec = { ...defaultSpec, ...adapterContract(adapter) };
     const { fetcher } = mount(
       `/projects/${project.id}/agents`,
       (path, init) => {
@@ -817,7 +852,7 @@ describe("registry and explicit export", () => {
           return {
             ...revision,
             label: "Reviewed implementation",
-            spec: defaultSpec,
+            spec,
           };
       },
     );
@@ -833,6 +868,9 @@ describe("registry and explicit export", () => {
       screen.getByLabelText("Revision label"),
       "Reviewed implementation",
     );
+    expect(screen.getByLabelText(/^Adapter/)).toHaveValue("synthetic-customer");
+    await user.selectOptions(screen.getByLabelText(/^Adapter/), adapter);
+    expect(screen.getByLabelText("Behavior variant")).toHaveValue("fixed");
     await user.click(screen.getByRole("button", { name: "Create revision" }));
     await waitFor(() =>
       expect(fetcher).toHaveBeenCalledWith(
@@ -841,7 +879,7 @@ describe("registry and explicit export", () => {
           method: "POST",
           body: JSON.stringify({
             label: "Reviewed implementation",
-            spec: defaultSpec,
+            spec,
           }),
         }),
       ),
@@ -849,6 +887,40 @@ describe("registry and explicit export", () => {
     expect(fetcher.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(
       false,
     );
+  });
+
+  it("keeps matching fixtures and tools when switching adapters and round-tripping advanced JSON", async () => {
+    mount(`/projects/${project.id}/agents?agent=${agent.id}`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New revision" }));
+    expect(screen.getByRole("option", { name: "VaR — Powerplant" })).toHaveValue("synthetic-powerplant-var");
+    expect(screen.getByText(/Register a logical agent, then choose/)).toHaveTextContent("VaR — Powerplant when creating its execution revision.");
+    expect(screen.queryByText(/VaR — Synthetic Powerplant/)).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(/^Adapter/), "synthetic-powerplant-var");
+    await user.click(screen.getByRole("button", { name: "Edit advanced specification JSON" }));
+    expect(JSON.parse((screen.getByLabelText("Non-secret specification JSON") as HTMLTextAreaElement).value))
+      .toMatchObject(adapterContract("synthetic-powerplant-var"));
+    await user.click(screen.getByRole("button", { name: "Return to fields" }));
+    expect(screen.getByLabelText(/^Adapter/)).toHaveValue("synthetic-powerplant-var");
+    await user.selectOptions(screen.getByLabelText(/^Adapter/), "synthetic-customer");
+    await user.click(screen.getByRole("button", { name: "Edit advanced specification JSON" }));
+    expect(JSON.parse((screen.getByLabelText("Non-secret specification JSON") as HTMLTextAreaElement).value))
+      .toEqual(defaultSpec);
+  });
+
+  it("accepts VaR advanced specifications and rejects mismatched fixtures/contracts and unsupported adapters", () => {
+    const spec = { ...defaultSpec, ...adapterContract("synthetic-powerplant-var") };
+    expect(parseAgentSpec(JSON.stringify(spec), [])).toEqual(spec);
+    for (const mismatch of [
+      { ...spec, fixture_version: "synthetic-v1" },
+      { ...spec, tool_contract: "customer-lookup-v1" },
+      { ...defaultSpec, fixture_version: spec.fixture_version },
+      { ...defaultSpec, tool_contract: spec.tool_contract },
+    ]) {
+      expect(() => parseAgentSpec(JSON.stringify(mismatch), [])).toThrow("fixtures");
+    }
+    expect(() => parseAgentSpec(JSON.stringify({ ...spec, adapter: "unknown" }), [])).toThrow("Use synthetic-customer or synthetic-powerplant-var");
+    expect(() => parseAgentSpec(JSON.stringify({ ...spec, adapter: ["synthetic-powerplant-var"] }), [])).toThrow("Use synthetic-customer or synthetic-powerplant-var");
   });
 
   it("requires explicit revision and mode, permits archived export, and surfaces backend errors", async () => {
@@ -917,10 +989,122 @@ describe("registry and explicit export", () => {
     expect(fetcher).toHaveBeenCalledWith(
       `/api/v2/projects/${project.id}/chat-sessions`,
       expect.objectContaining({
-        body: JSON.stringify({ agent_revision_id: revision.id }),
+        body: JSON.stringify({ agent_revision_id: revision.id, mode: "mock" }),
         method: "POST",
       }),
     );
+  });
+
+  it.each(["dual", "live-only"])("prefers Foundry for a %s VaR revision and never retries failed creation in mock", async (kind) => {
+    const liveRevision = {
+      ...revision,
+      spec: {
+        ...revision.spec,
+        ...adapterContract("synthetic-powerplant-var"),
+        modes: kind === "dual" ? ["mock", "live"] : ["live"],
+      },
+    };
+    const { fetcher } = mount(`/projects/${project.id}/playground`, (path, init) => {
+      if (path.endsWith("/revisions")) return [liveRevision];
+      if (path.endsWith("/chat-sessions") && init?.method === "POST")
+        return new Response(JSON.stringify({ detail: "Foundry binding unavailable" }), { status: 422 });
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New session" }));
+    await chooseRevision();
+    expect(screen.getByLabelText("Session execution mode")).toHaveValue("live");
+    expect(screen.getByRole("option", { name: "Live — Foundry LLM" })).toBeEnabled();
+    expect(screen.getByRole("option", { name: "Mock — test only (no LLM)" })).toHaveValue("mock");
+    const notices = screen.getAllByText(/Sessions use synthetic, read-only tools/);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toBeVisible();
+    expect(notices[0]).toHaveTextContent("Live errors never fall back to mock execution.");
+    expect(screen.getByText("SYNTHETIC DATA")).toBeVisible();
+    expect(screen.getByText("VaR supports powerplant operators with incident analysis, risk assessments, and commercial insights.")).toBeVisible();
+    expect(screen.queryByText(/mocked|synthetic random/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/This session will call the real Foundry LLM/)).toHaveTextContent("Provider/configuration errors will be shown without mock fallback.");
+    expect(screen.getByRole("button", { name: "Create session" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Create session" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Foundry binding unavailable");
+    const requests = fetcher.mock.calls.filter(([path, init]) => path.endsWith("/chat-sessions") && init?.method === "POST");
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(requests[0][1]!.body as string)).toEqual({ agent_revision_id: revision.id, mode: "live" });
+    expect(screen.getByLabelText("Session execution mode")).toHaveValue("live");
+  });
+
+  it("requires an explicit test-mode choice for mock-only VaR and guides live configuration", async () => {
+    const { fetcher } = mount(`/projects/${project.id}/playground`, (path, init) => {
+      if (path.endsWith("/revisions")) return [{ ...revision, spec: { ...defaultSpec, ...adapterContract("synthetic-powerplant-var") } }];
+      if (path.endsWith("/chat-sessions") && init?.method === "POST")
+        return new Response(JSON.stringify({ detail: "Test boundary" }), { status: 409 });
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New session" }));
+    await chooseRevision();
+    const mode = screen.getByLabelText("Session execution mode");
+    expect(mode).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Create session" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "Configure a live VaR revision" })).toHaveAttribute("href", `/projects/${project.id}/agents?agent=${agent.id}`);
+    fireEvent.submit(mode.closest("form")!);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+    await user.selectOptions(mode, "mock");
+    await user.click(screen.getByRole("button", { name: "Create session" }));
+    await screen.findByRole("alert");
+    const request = fetcher.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(request[1]!.body as string).mode).toBe("mock");
+  });
+
+  it("keeps live selected but blocks an unconfigured VaR revision instead of falling back", async () => {
+    mount(`/projects/${project.id}/playground`, (path) => {
+      if (path.endsWith("/revisions")) return [{ ...revision, spec: { ...defaultSpec, ...adapterContract("synthetic-powerplant-var"), modes: ["mock", "live"] } }];
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New session" }));
+    await chooseRevision();
+    expect(screen.getByLabelText("Session execution mode")).toHaveValue("live");
+    expect(screen.getByRole("button", { name: "Create session" })).toBeDisabled();
+    expect(screen.getByText(/Live execution requires a revision/)).toBeVisible();
+  });
+
+  it("configures a live VaR revision through approved binding fields", async () => {
+    const { fetcher } = mount(`/projects/${project.id}/agents?agent=${agent.id}`, (path, init) => {
+      if (path.endsWith("/connection-bindings")) return [{ id: "demo", endpoint: revision.spec.connection!.endpoint, auth: "api_key", configured: true }];
+      if (path.endsWith("/revisions") && init?.method === "POST") return revision;
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New revision" }));
+    await user.selectOptions(screen.getByLabelText(/^Adapter/), "synthetic-powerplant-var");
+    await user.type(screen.getByLabelText("Revision label"), "VaR Foundry");
+    await user.click(screen.getByRole("button", { name: "Configure Foundry live execution" }));
+    expect(screen.getByRole("button", { name: "Create revision" })).toBeDisabled();
+    expect(screen.getByText(/To create a live revision, select an approved binding/)).toBeVisible();
+    await user.selectOptions(screen.getByLabelText("Connection binding"), "demo");
+    await user.type(screen.getByLabelText("Deployment"), "demo");
+    expect(screen.getByRole("button", { name: "Create revision" })).toBeDisabled();
+    await user.type(screen.getByLabelText("API version"), "2025-01-01");
+    expect(screen.getByRole("button", { name: "Create revision" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Create revision" }));
+    await waitFor(() => expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const request = fetcher.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(request[1]!.body as string).spec).toMatchObject({
+      ...adapterContract("synthetic-powerplant-var"),
+      modes: ["mock", "live"],
+      connection: revision.spec.connection,
+    });
+  });
+
+  it("explains the VaR setup requirement when the project has no approved bindings", async () => {
+    mount(`/projects/${project.id}/agents?agent=${agent.id}`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New revision" }));
+    await user.selectOptions(screen.getByLabelText(/^Adapter/), "synthetic-powerplant-var");
+    await user.type(screen.getByLabelText("Revision label"), "VaR Foundry");
+    await user.click(screen.getByRole("button", { name: "Configure Foundry live execution" }));
+    expect(await screen.findByText(/No server-approved bindings for this project/)).toHaveTextContent("Mock mode is available for tests only");
+    expect(screen.getByRole("button", { name: "Create revision" })).toBeDisabled();
+    await user.click(screen.getByLabelText("Enable live mode in addition to mock"));
+    expect(screen.getByRole("button", { name: "Create revision" })).toBeEnabled();
+    expect(screen.getByText(/currently supports mock tests only/)).toBeVisible();
   });
 
   it("rejects secret fields and unapproved connection metadata before submission", () => {

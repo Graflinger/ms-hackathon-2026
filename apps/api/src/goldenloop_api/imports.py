@@ -155,6 +155,7 @@ def mapped_cases(payload: dict, mapping: dict, sheet: str | None, import_id: str
         "tags",
         "scenario_id",
         "turn_index",
+        "fixture_version",
     }
     if not mapping or set(mapping) - allowed or set(mapping.values()) - set(table["columns"]):
         raise ImportError("Invalid mapping fields or uploaded columns")
@@ -196,7 +197,7 @@ def mapped_cases(payload: dict, mapping: dict, sheet: str | None, import_id: str
     for group in groups:
         first, _, user = group["items"][0]
         for item, row, _ in group["items"][1:]:
-            for key in ("id", "case_id", "title", "context", "scenario", "tags"):
+            for key in ("id", "case_id", "title", "context", "scenario", "tags", "fixture_version"):
                 if item.get(key) and item.get(key) != first.get(key):
                     raise ImportError(f"Row {row}: conflicting scenario metadata")
         tags = first.get("tags", "")
@@ -216,6 +217,7 @@ def mapped_cases(payload: dict, mapping: dict, sheet: str | None, import_id: str
                 title=first.get("title") or user[:200],
                 tags=["synthetic", *tags],
                 context=first.get("context", first.get("scenario", "")),
+                fixture_version=first.get("fixture_version") or "synthetic-v1",
                 source={
                     "type": "import",
                     "import_id": import_id,

@@ -325,5 +325,15 @@ def evaluate(case: Case, observation: Observation, judge: Judge | None = None, *
                                    reason="; ".join(execution_errors)))
     gate = ("error" if execution_errors or any(r.status in {"error", "skipped"} for r in required)
             else "fail" if any(r.status == "fail" for r in required) else "pass")
-    return Evaluation(case_id=case.id, case_revision=case.revision, checks=results, gate=gate,
-                      agent_revision=observation.agent_revision, mode=observation.mode)
+    result = Evaluation(case_id=case.id, case_revision=case.revision, checks=results, gate=gate,
+                        agent_revision=observation.agent_revision, mode=observation.mode)
+    # A CLI judge may discover/refresh a bearer token during scoring. Redact earlier
+    # deterministic evidence too, rather than relying on the pre-invocation snapshot.
+    current_secrets = (*secrets, *getattr(judge, "secrets", ()))
+    try:
+        return Evaluation.model_validate(sanitize(result.model_dump(mode="json"), secrets=current_secrets))
+    except ValueError:
+        return Evaluation(case_id=sanitize(case.id, secrets=current_secrets), case_revision=case.revision,
+                          agent_revision=sanitize(observation.agent_revision, secrets=current_secrets),
+                          mode=observation.mode, gate="error", checks=[CheckResult(
+                              id="__execution__", kind="execution", status="error", reason="Unsafe evaluation data")])

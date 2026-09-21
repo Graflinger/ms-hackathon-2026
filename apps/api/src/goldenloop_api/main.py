@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from goldenloop_eval import SDK_VERSION, Case, Turn, release_hash
+from goldenloop_eval import SDK_VERSION, AgentSpec, Case, Turn, release_hash
 from goldenloop_eval.models import validate_case_split
 from pydantic import ValidationError
 from sqlalchemy import func, select, text
@@ -72,7 +72,7 @@ def chat_record(row, detail=False):
     keys = ["id", "title", "agent_revision", "created_at", "status", "trace_complete", "error"]
     if detail:
         keys += ["messages", "tool_calls"]
-    result = {**{key: getattr(row, key) for key in keys}, "mode": "mock"}
+    result = {**{key: getattr(row, key) for key in keys}, "mode": row.mode}
     if current_scope.get() and not current_scope.get().legacy:
         result.update(execution_metadata(row))
     return result
@@ -147,8 +147,8 @@ def validate_case(case):
         raise HTTPException(422, "Case exceeds size, turn, or check limits")
     if len(case.id) > 200 or "/" in case.id or "\\" in case.id or clean(case.id) != case.id:
         raise HTTPException(422, "Case ID must be a path-safe identifier of at most 200 characters")
-    if case.fixture_version != "synthetic-v1":
-        raise HTTPException(422, "Only synthetic-v1 fixtures are supported")
+    if case.fixture_version not in {"synthetic-v1", "synthetic-powerplant-v1"}:
+        raise HTTPException(422, "Only synthetic-v1 and synthetic-powerplant-v1 fixtures are supported")
     if any(check.turn is not None and check.turn >= len(case.turns) for check in case.checks):
         raise HTTPException(422, "Check turn is outside the case")
     payload["source"] = {**payload["source"], "synthetic": True}
@@ -416,14 +416,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ).all()
                 fingerprints = {
                     json.dumps(
-                        {"context": item.payload["context"], "turns": item.payload["turns"]}, sort_keys=True
+                        {
+                            "fixture_version": item.payload["fixture_version"],
+                            "context": item.payload["context"],
+                            "turns": item.payload["turns"],
+                        },
+                        sort_keys=True,
                     )
                     for item in existing
                 }
             records = []
             for case in imported:
                 fingerprint = json.dumps(
-                    {"context": case.context, "turns": [t.model_dump() for t in case.turns]}, sort_keys=True
+                    {
+                        "fixture_version": case.fixture_version,
+                        "context": case.context,
+                        "turns": [t.model_dump() for t in case.turns],
+                    },
+                    sort_keys=True,
                 )
                 if body.duplicate_policy == "reject":
                     if case.id in seen or await session.get(CaseHead, case.id) or fingerprint in fingerprints:
@@ -571,6 +581,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(409, "A message is already pending for this session")
             if chat.status in {"failed", "interrupted"}:
                 raise HTTPException(409, "Start a new session after an incomplete turn")
+            if not chat.legacy_workflow:
+                from .registry import execution_key, validate_capabilities
+
+                spec = AgentSpec.model_validate(chat.pinned_revision.spec)
+                validate_capabilities(spec, [], chat.mode)
+                execution_key(spec, chat.project_id, chat.mode, settings)
             turn = len([message for message in chat.messages if message["role"] == "user"])
             if turn >= 50:
                 raise HTTPException(422, "Session turn limit exceeded")
@@ -588,11 +604,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def create_feedback(body: CreateFeedback):
         async with db.write() as session:
             chat = await get_or_404(session, ChatSession, body.session_id)
+            required_role = "user" if body.target == "tool" else "assistant"
             if not any(
-                message.get("turn") == body.turn and message["role"] == "assistant"
+                message.get("turn") == body.turn and message["role"] == required_role
                 for message in chat.messages
             ):
-                raise HTTPException(422, "Feedback requires an observed completed turn")
+                raise HTTPException(422, f"Feedback requires an observed {required_role} message for the turn")
             if body.target == "tool":
                 if not body.tool_call_id or not any(
                     call["id"] == body.tool_call_id and call["turn"] == body.turn for call in chat.tool_calls
@@ -647,6 +664,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             case = Case(
                 title="Feedback: " + chat.title,
                 tags=["synthetic", "feedback"],
+                fixture_version=(
+                    "synthetic-v1"
+                    if chat.legacy_workflow
+                    else AgentSpec.model_validate(chat.pinned_revision.spec).fixture_version
+                ),
                 turns=turns,
                 source={
                     "type": "feedback",

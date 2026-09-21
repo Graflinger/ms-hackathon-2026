@@ -56,12 +56,12 @@ class AgentConnection(Model):
 
 class AgentSpec(Model):
     schema_version: Literal["1"] = "1"
-    adapter: Literal["synthetic-customer"] = "synthetic-customer"
+    adapter: Literal["synthetic-customer", "synthetic-powerplant-var"] = "synthetic-customer"
     artifact: str = Field(default=TRUSTED_AGENT_ARTIFACT, min_length=1)
     variant: Literal["buggy", "fixed"]
     instructions: str = ""
-    fixture_version: Literal["synthetic-v1"] = "synthetic-v1"
-    tool_contract: Literal["customer-lookup-v1"] = "customer-lookup-v1"
+    fixture_version: Literal["synthetic-v1", "synthetic-powerplant-v1"] = "synthetic-v1"
+    tool_contract: Literal["customer-lookup-v1", "powerplant-decision-v1"] = "customer-lookup-v1"
     modes: list[Literal["mock", "live"]] = Field(default_factory=lambda: ["mock"], min_length=1)
     supports_multi_turn: bool = True
     trace_available: bool = True
@@ -69,6 +69,12 @@ class AgentSpec(Model):
 
     @model_validator(mode="after")
     def valid_spec(self):
+        expected = {
+            "synthetic-customer": ("synthetic-v1", "customer-lookup-v1"),
+            "synthetic-powerplant-var": ("synthetic-powerplant-v1", "powerplant-decision-v1"),
+        }[self.adapter]
+        if (self.fixture_version, self.tool_contract) != expected:
+            raise ValueError("Adapter fixture and tool contract must match")
         if len(self.modes) != len(set(self.modes)):
             raise ValueError("Agent modes must be unique")
         if "live" in self.modes and self.connection is None:
@@ -122,10 +128,14 @@ class BundleManifestV2(Model):
         if self.judge == {"selection": "none"}:
             return self
         required = {"selection", "provider", "endpoint", "deployment", "api_version", "prompt_version", "settings"}
-        if (set(self.judge) != required or self.judge.get("selection") != "azure"
+        if (set(self.judge) not in (required, required | {"auth"})
+                or self.judge.get("auth", "api_key") not in ("api_key", "azure_cli")
+                or self.judge.get("selection") != "azure"
                 or self.judge.get("provider") != "azure-openai"
                 or self.judge.get("prompt_version") != "goldenloop-judge-v1"
-                or self.judge.get("settings") != {"temperature": 0}
+                or not (self.judge.get("settings") == {} or (
+                    self.judge.get("settings") == {"temperature": 0}
+                    and type(self.judge["settings"]["temperature"]) in (int, float)))
                 or any(not isinstance(self.judge.get(k), str) or not self.judge[k].strip()
                        for k in ("endpoint", "deployment", "api_version"))):
             raise ValueError("Unsupported or incomplete pinned judge configuration")

@@ -50,6 +50,55 @@ async def test_multiturn_grouping(client):
     assert len(cases) == 2 and len(cases[0]["case"]["turns"]) == 2
 
 
+async def test_fixture_mapping_and_fixture_aware_duplicates(client):
+    mapping = {name: name for name in ("question", "fixture_version")}
+    for fixture, expected in (
+        ("synthetic-v1", 200),
+        ("synthetic-powerplant-v1", 200),
+        ("synthetic-powerplant-v1", 409),
+        ("unsupported", 422),
+    ):
+        preview = (
+            await upload(client, f"question,fixture_version\nAssess cooling_water,{fixture}\n".encode())
+        ).json()
+        response = await client.post(
+            f"/api/v1/imports/{preview['id']}/commit",
+            json={"mapping": mapping, "duplicate_policy": "reject"},
+        )
+        assert response.status_code == expected, response.text
+        if expected == 200:
+            record = response.json()["cases"][0]
+            assert record["case"]["fixture_version"] == fixture
+            assert record["status"] == "candidate"
+    assert len((await client.get("/api/v1/cases")).json()) == 2
+
+
+async def test_multiturn_fixture_mapping_rejects_conflicts_atomically(client):
+    mapping = {name: name for name in ("scenario_id", "turn_index", "question", "fixture_version")}
+    for second_fixture, expected in (("synthetic-v1", 422), ("synthetic-powerplant-v1", 200)):
+        preview = (
+            await upload(
+                client,
+                (
+                    "scenario_id,turn_index,question,fixture_version\n"
+                    "first,0,Assess cooling_water,synthetic-powerplant-v1\n"
+                    f"first,1,What about the risk?,{second_fixture}\n"
+                ).encode(),
+            )
+        ).json()
+        response = await client.post(
+            f"/api/v1/imports/{preview['id']}/commit",
+            json={"mapping": mapping, "duplicate_policy": "new"},
+        )
+        assert response.status_code == expected, response.text
+        if expected == 422:
+            assert (await client.get("/api/v1/cases")).json() == []
+        else:
+            case = response.json()["cases"][0]["case"]
+            assert case["fixture_version"] == "synthetic-powerplant-v1"
+            assert len(case["turns"]) == 2
+
+
 @pytest.mark.parametrize(
     "rows",
     [

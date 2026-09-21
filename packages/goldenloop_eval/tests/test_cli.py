@@ -139,7 +139,8 @@ def test_legacy_cli_uses_judge_secret_snapshot_for_execution_and_reports(tmp_pat
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     manifest["content_hash"] = release_hash([case])
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
-    judge = SimpleNamespace(secrets=(key,), client=SimpleNamespace(close=lambda: None))
+    closed = []
+    judge = SimpleNamespace(secrets=(key,), close=lambda: closed.append(True))
     monkeypatch.setattr(OpenAIJudge, "from_azure_env", lambda: judge)
     inputs = []
     async def invoke(case, revision, mode):
@@ -152,3 +153,4 @@ def test_legacy_cli_uses_judge_secret_snapshot_for_execution_and_reports(tmp_pat
     outputs = [capsys.readouterr().out, (tmp_path / "report.json").read_text(),
                (tmp_path / "report.xml").read_text(), *inputs]
     assert all(key not in value for value in outputs)
+    assert closed == [True]

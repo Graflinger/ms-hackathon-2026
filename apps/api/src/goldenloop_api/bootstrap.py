@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, event
 from .config import Settings, clean
 from .db import CaseHead, CaseRevision, Database, configure_sqlite, journal_mode
 
-SCHEMA_REVISION = "0002"
+SCHEMA_REVISION = "0003"
 
 
 def migrate(settings: Settings):
@@ -81,10 +81,14 @@ def main(argv=None):
         "GOLDENLOOP_ALLOW_LIVE_SYNTHETIC=true plus goldenloop-demo-agent[live] and "
         "AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_CHAT_COMPLETION_MODEL, AZURE_OPENAI_API_VERSION "
         "and API key or Azure CLI credentials. Redaction is best-effort, not a DLP guarantee. "
-        "Do not supply real customer data. Chat is deterministic mock-only. Azure judging requires "
+        "Do not supply real customer data. Live playground sessions require an approved binding. Azure judging requires "
         "GOLDENLOOP_ALLOW_LIVE_SYNTHETIC_JUDGE=true, goldenloop-eval[live], "
         "GOLDENLOOP_JUDGE_ENDPOINT, GOLDENLOOP_JUDGE_DEPLOYMENT, GOLDENLOOP_JUDGE_API_VERSION, "
-        "GOLDENLOOP_JUDGE_API_KEY and explicit judge=azure in the run request. Agent mode and judge "
+        "and explicit judge=azure in the run request. GOLDENLOOP_JUDGE_AUTH defaults to api_key, "
+        "requiring GOLDENLOOP_JUDGE_API_KEY; set GOLDENLOOP_JUDGE_AUTH=azure_cli and run az login "
+        "in the execution environment to use Azure CLI credentials instead. "
+        "GOLDENLOOP_JUDGE_TEMPERATURE defaults to 0; set it to default to omit temperature "
+        "for deployments that reject temperature=0. Agent mode and judge "
         "selection are independent; default mock/none never makes cloud calls. At most 20 judge checks per run.",
     )
     parser.add_argument("--seed", action="store_true", help="Add an unapproved synthetic example if absent")

@@ -172,6 +172,7 @@ def main(argv: list[str] | None = None, *, runner: AgentRunner | None = None) ->
             results = asyncio.run(run_cases(cases, runner, revision=revision, mode=mode, timeout=args.timeout,
                                             judge=judge, secrets=secrets))
         if report is None:
+            secrets = (*secrets, *getattr(judge, "secrets", ()))
             report = build_report(results, secrets=secrets, **lineage)
     except Exception as exc:
         report = build_report([])
@@ -179,7 +180,7 @@ def main(argv: list[str] | None = None, *, runner: AgentRunner | None = None) ->
     finally:
         if judge is not None:
             try:
-                judge.client.close()
+                judge.close()
             except Exception:
                 report = build_report([])
                 report["error"] = "Judge client cleanup failed"

@@ -97,15 +97,139 @@ def test_pinned_judge_matching_config_is_independent_and_closed(tmp_path, monkey
     calls, closed = [], []
     def create(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(client=SimpleNamespace(close=lambda: closed.append(True)))
+        return SimpleNamespace(close=lambda: closed.append(True))
     monkeypatch.setattr(OpenAIJudge, "from_azure", create)
     before = dict(os.environ)
     report = asyncio.run(run_bundle(tmp_path, "azure"))
     assert report["gate"] == "pass"
     assert calls == [{"endpoint": "https://judge.openai.azure.com", "deployment": "judge",
-                      "api_version": "2025-01-01-preview", "api_key": "judge-key"}]
+                      "api_version": "2025-01-01-preview", "api_key": "judge-key", "auth": "api_key",
+                      "temperature": 0}]
     assert closed == [True]
     assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("auth", [None, "api_key", "azure_cli"])
+def test_judge_manifest_auth_roundtrip_preserves_old_and_new_dicts(tmp_path, auth):
+    from copy import deepcopy
+    judge = azure_judge()
+    if auth is not None:
+        judge["auth"] = auth
+    before = deepcopy(judge)
+    manifest = bundle(tmp_path, judge=judge)
+    restored, _ = load_bundle(tmp_path)
+    assert judge == before
+    assert manifest.judge == restored.model_dump()["judge"] == before
+
+
+@pytest.mark.parametrize("auth", ["", "unknown", None, 1, [], {}])
+def test_judge_manifest_rejects_invalid_explicit_auth(tmp_path, auth):
+    with pytest.raises(ValueError, match="pinned judge"):
+        bundle(tmp_path, judge={**azure_judge(), "auth": auth})
+
+
+@pytest.mark.parametrize("settings", [{}, {"temperature": 0}])
+def test_temperature_manifest_roundtrip_preserves_settings(tmp_path, settings):
+    from copy import deepcopy
+    judge = {**azure_judge(), "settings": settings}
+    before = deepcopy(judge)
+    manifest = bundle(tmp_path, judge=judge)
+    original = (tmp_path / "manifest.json").read_bytes()
+    restored, cases = load_bundle(tmp_path)
+    assert judge == before == restored.judge
+    assert restored.content_hash == manifest.content_hash == release_hash(cases)
+    assert restored.model_dump_json().encode() == original
+
+
+@pytest.mark.parametrize("settings", [None, [], {"temperature": None}, {"temperature": False},
+                                        {"temperature": "0"}, {"temperature": 1}, {"top_p": 1}])
+def test_temperature_manifest_rejects_unsupported_settings(tmp_path, settings):
+    with pytest.raises(ValueError, match="pinned judge"):
+        bundle(tmp_path, judge={**azure_judge(), "settings": settings})
+
+
+@pytest.mark.parametrize(("settings", "local"), [({"temperature": 0}, "default"), ({}, "0"), ({}, None)])
+def test_temperature_drift_precedes_construction_and_invocation(tmp_path, monkeypatch, settings, local):
+    import goldenloop_demo_agent
+    from goldenloop_eval import OpenAIJudge
+    judge = {**azure_judge(), "settings": settings}
+    bundle(tmp_path, judge=judge)
+    for suffix, value in {"ENDPOINT": judge["endpoint"], "DEPLOYMENT": judge["deployment"],
+                          "API_VERSION": judge["api_version"], "API_KEY": "judge-key"}.items():
+        monkeypatch.setenv("GOLDENLOOP_JUDGE_" + suffix, value)
+    monkeypatch.delenv("GOLDENLOOP_JUDGE_AUTH", raising=False)
+    if local is None:
+        monkeypatch.delenv("GOLDENLOOP_JUDGE_TEMPERATURE", raising=False)
+    else:
+        monkeypatch.setenv("GOLDENLOOP_JUDGE_TEMPERATURE", local)
+    calls = []
+
+    def unexpected(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("Must not invoke")
+
+    monkeypatch.setattr(OpenAIJudge, "from_azure", unexpected)
+    monkeypatch.setattr(goldenloop_demo_agent, "run_revision", unexpected)
+    before = json.dumps(judge)
+    with pytest.raises(ValueError, match="differs"):
+        OpenAIJudge.from_azure_env(expected=judge)
+    with pytest.raises(ValueError, match="differs"):
+        asyncio.run(run_bundle(tmp_path, "azure"))
+    assert json.dumps(judge) == before
+    assert calls == []
+
+
+@pytest.mark.parametrize(("pinned", "local", "matches"), [
+    (None, None, True), (None, "api_key", True), ("api_key", None, True),
+    ("azure_cli", "azure_cli", True), (None, "azure_cli", False),
+    ("api_key", "azure_cli", False), ("azure_cli", None, False),
+    ("azure_cli", "api_key", False),
+])
+def test_bundle_auth_match_before_invocation(tmp_path, monkeypatch, pinned, local, matches):
+    from types import SimpleNamespace
+    import goldenloop_demo_agent
+    from goldenloop_eval import OpenAIJudge
+    judge = azure_judge()
+    if pinned is not None:
+        judge["auth"] = pinned
+    bundle(tmp_path, judge=judge)
+    path = tmp_path / "manifest.json"
+    before = path.read_bytes()
+    for suffix, value in {"ENDPOINT": judge["endpoint"], "DEPLOYMENT": judge["deployment"],
+                          "API_VERSION": judge["api_version"], "API_KEY": "judge-key"}.items():
+        monkeypatch.setenv("GOLDENLOOP_JUDGE_" + suffix, value)
+    if local is None:
+        monkeypatch.delenv("GOLDENLOOP_JUDGE_AUTH", raising=False)
+    else:
+        monkeypatch.setenv("GOLDENLOOP_JUDGE_AUTH", local)
+    if local == "azure_cli":
+        monkeypatch.delenv("GOLDENLOOP_JUDGE_API_KEY")
+    calls, closed = [], []
+    original = goldenloop_demo_agent.run_revision
+
+    async def invoke(*args, **kwargs):
+        calls.append("invoke")
+        return await original(*args, **kwargs)
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(close=lambda: closed.append(True))
+
+    monkeypatch.setattr(goldenloop_demo_agent, "run_revision", invoke)
+    monkeypatch.setattr(OpenAIJudge, "from_azure", create)
+    if matches:
+        report = asyncio.run(run_bundle(tmp_path, "azure"))
+        assert report["gate"] == "pass"
+        assert report["judge"] == judge
+        assert calls[0]["auth"] == (local or "api_key")
+        assert calls[0]["api_key"] == (None if local == "azure_cli" else "judge-key")
+        assert calls[1:] == ["invoke"]
+        assert closed == [True]
+    else:
+        with pytest.raises(ValueError, match="differs"):
+            asyncio.run(run_bundle(tmp_path, "azure"))
+        assert calls == closed == []
+    assert path.read_bytes() == before
 
 
 def test_live_export_resolves_local_binding_once(tmp_path, monkeypatch):

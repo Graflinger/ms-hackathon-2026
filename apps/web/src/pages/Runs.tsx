@@ -855,8 +855,17 @@ export default function Runs() {
                   <code>GOLDENLOOP_ALLOW_LIVE_SYNTHETIC_JUDGE=true</code>,{" "}
                   <code>GOLDENLOOP_JUDGE_ENDPOINT</code>,{" "}
                   <code>GOLDENLOOP_JUDGE_DEPLOYMENT</code>,{" "}
-                  <code>GOLDENLOOP_JUDGE_API_VERSION</code>, and{" "}
-                  <code>GOLDENLOOP_JUDGE_API_KEY</code>. This UI does not
+                  <code>GOLDENLOOP_JUDGE_API_VERSION</code>. Authentication defaults
+                  to <code>GOLDENLOOP_JUDGE_AUTH=api_key</code>, requiring{" "}
+                  <code>GOLDENLOOP_JUDGE_API_KEY</code>. For Azure CLI authentication,
+                  set <code>GOLDENLOOP_JUDGE_AUTH=azure_cli</code>, install{" "}
+                  <code>goldenloop-eval[live]</code>, and run <code>az login</code>{" "}
+                  in the server execution environment; no judge API key is needed.
+                  For deployments that reject temperature 0, optionally set{" "}
+                  <code>GOLDENLOOP_JUDGE_TEMPERATURE=default</code> to omit the
+                  temperature request field. Unset or <code>0</code> retains
+                  temperature 0.
+                  This UI does not
                   configure, accept, or verify secrets. Missing configuration is
                   reported by the backend before queuing.
                 </Notice>

@@ -162,6 +162,7 @@ class ExecutionMetadata(ResponseModel):
 
 class ChatRecordV2(ChatRecord, ExecutionMetadata):
     agent_revision: str
+    mode: Literal["mock", "live"]
 
 
 class ChatDetailV2(ChatRecordV2):

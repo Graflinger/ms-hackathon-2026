@@ -100,6 +100,7 @@ class CreateRevision(RequestModel):
 class CreateChatV2(RequestModel):
     title: str = Field(default="Synthetic conversation", min_length=1, max_length=200)
     agent_revision_id: str = Field(min_length=1, max_length=200)
+    mode: Literal["mock", "live"] = "mock"
 
 
 class CreateRunV2(RequestModel):
@@ -388,13 +389,15 @@ def install_v2(app, legacy_router, db, settings):
         async with db.write() as session:
             revision = await selected_revision(session, body.agent_revision_id, active=True)
             spec = AgentSpec.model_validate(revision.spec)
-            validate_capabilities(spec, [], "mock")
+            validate_capabilities(spec, [], body.mode)
+            execution_key(spec, project_id, body.mode, settings)
             if not spec.supports_multi_turn or not spec.trace_available:
                 raise HTTPException(409, "Playground requires multi-turn and tool trace capabilities")
             row = ChatSession(
                 project_id=project_id,
                 title=clean(body.title),
                 agent_revision=revision.id,
+                mode=body.mode,
                 agent_revision_id=revision.id,
                 legacy_workflow=False,
                 pinned_revision=revision,

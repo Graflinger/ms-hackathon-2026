@@ -46,6 +46,7 @@ def test_explicit_judge_blocks_redirects_and_legacy_auth(monkeypatch):
             assert kwargs["follow_redirects"] is False
             super().__init__(transport=httpx.MockTransport(respond), **kwargs)
     monkeypatch.setattr(httpx, "Client", Client)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "legacy-key")
     monkeypatch.setenv("AZURE_OPENAI_AD_TOKEN", "legacy-token")
     monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Other-Service-Key: private-project-a-secret\napi-key: wrong-key\nAuthorization: Bearer wrong-auth")
     monkeypatch.setenv("OPENAI_ORG_ID", "private-org")

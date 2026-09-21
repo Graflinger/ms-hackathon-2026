@@ -124,10 +124,12 @@ def test_populated_upgrade_preserves_exact_evidence_and_constraints(settings):
                 assert spec.modes == ["mock"] and spec.connection is None and legacy
                 assert digest == agent_spec_hash(spec) and revision == "synthetic-" + spec.variant
             assert after["evaluation_runs"][0]["agent_revision_id"] == "synthetic-fixed"
+            assert after["chat_sessions"][0]["mode"] == "mock"
             for sql in (
                 "UPDATE agent_revisions SET spec_hash='changed' WHERE id='synthetic-fixed'",
                 "UPDATE cases SET project_id=NULL WHERE id='old-case'",
                 "UPDATE chat_sessions SET agent_revision_id='synthetic-buggy' WHERE id='old-chat'",
+                "UPDATE chat_sessions SET mode='live' WHERE id='old-chat'",
                 "INSERT INTO cases(id, latest) VALUES ('missing-owner', 1)",
             ):
                 with pytest.raises(IntegrityError):

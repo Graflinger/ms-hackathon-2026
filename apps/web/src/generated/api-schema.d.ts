@@ -877,9 +877,9 @@ export interface components {
             /**
              * Adapter
              * @default synthetic-customer
-             * @constant
+             * @enum {string}
              */
-            adapter?: "synthetic-customer";
+            adapter?: "synthetic-customer" | "synthetic-powerplant-var";
             /**
              * Artifact
              * @default goldenloop-demo-agent==0.2.0
@@ -889,9 +889,9 @@ export interface components {
             /**
              * Fixture Version
              * @default synthetic-v1
-             * @constant
+             * @enum {string}
              */
-            fixture_version?: "synthetic-v1";
+            fixture_version?: "synthetic-v1" | "synthetic-powerplant-v1";
             /**
              * Instructions
              * @default
@@ -913,9 +913,9 @@ export interface components {
             /**
              * Tool Contract
              * @default customer-lookup-v1
-             * @constant
+             * @enum {string}
              */
-            tool_contract?: "customer-lookup-v1";
+            tool_contract?: "customer-lookup-v1" | "powerplant-decision-v1";
             /**
              * Trace Available
              * @default true
@@ -1105,9 +1105,9 @@ export interface components {
             messages: components["schemas"]["Message"][];
             /**
              * Mode
-             * @constant
+             * @enum {string}
              */
-            mode: "mock";
+            mode: "mock" | "live";
             /** Project Id */
             project_id: string;
             /** Spec Hash */
@@ -1168,9 +1168,9 @@ export interface components {
             legacy: boolean;
             /**
              * Mode
-             * @constant
+             * @enum {string}
              */
-            mode: "mock";
+            mode: "mock" | "live";
             /** Project Id */
             project_id: string;
             /** Spec Hash */
@@ -1260,6 +1260,12 @@ export interface components {
         CreateChatV2: {
             /** Agent Revision Id */
             agent_revision_id: string;
+            /**
+             * Mode
+             * @default mock
+             * @enum {string}
+             */
+            mode?: "mock" | "live";
             /**
              * Title
              * @default Synthetic conversation

@@ -5,6 +5,7 @@ import zipfile
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from goldenloop_demo_agent import run_case
 from goldenloop_eval import OpenAIJudge
 
@@ -257,7 +258,11 @@ async def test_queued_work_finishes_archived_and_missing_binding_fails_closed(
                 assert "OPAQUE" not in archive.read(".env.example").decode()
 
 
-async def test_new_judge_uses_one_explicit_configuration_snapshot(client, app, case_payload, monkeypatch):
+@pytest.mark.parametrize("auth", ["api_key", "azure_cli"])
+@pytest.mark.parametrize("temperature", ["0", "default"])
+async def test_new_judge_uses_one_explicit_configuration_snapshot(
+    client, app, case_payload, monkeypatch, auth, temperature
+):
     object.__setattr__(app.state.settings, "allow_live_judge", True)
     monkeypatch.setattr("goldenloop_api.judging.importlib.util.find_spec", lambda name: object())
     for key, value in {
@@ -265,6 +270,8 @@ async def test_new_judge_uses_one_explicit_configuration_snapshot(client, app, c
         "DEPLOYMENT": "original",
         "API_VERSION": "v1",
         "API_KEY": "original-key",
+        "AUTH": auth,
+        "TEMPERATURE": temperature,
     }.items():
         monkeypatch.setenv("GOLDENLOOP_JUDGE_" + key, value)
     calls, closed = [], []
@@ -275,10 +282,14 @@ async def test_new_judge_uses_one_explicit_configuration_snapshot(client, app, c
             "endpoint": "https://judge.example.com",
             "deployment": "original",
             "api_version": "v1",
-            "api_key": "original-key",
+            "api_key": "original-key" if auth == "api_key" else None,
+            "auth": auth,
+            "temperature": None if temperature == "default" else 0,
         }
         monkeypatch.setenv("GOLDENLOOP_JUDGE_DEPLOYMENT", "changed")
         monkeypatch.setenv("GOLDENLOOP_JUDGE_API_KEY", "rotated")
+        monkeypatch.setenv("GOLDENLOOP_JUDGE_AUTH", "azure_cli" if auth == "api_key" else "api_key")
+        monkeypatch.setenv("GOLDENLOOP_JUDGE_TEMPERATURE", "0" if temperature == "default" else "default")
         transport = SimpleNamespace(
             chat=SimpleNamespace(
                 completions=SimpleNamespace(
@@ -305,7 +316,9 @@ async def test_new_judge_uses_one_explicit_configuration_snapshot(client, app, c
             ),
             close=lambda: closed.append(True),
         )
-        return OpenAIJudge(transport, model=snapshot["deployment"], provider="azure-openai")
+        return OpenAIJudge(
+            transport, model=snapshot["deployment"], provider="azure-openai", temperature=snapshot["temperature"]
+        )
 
     monkeypatch.setattr("goldenloop_api.judging.OpenAIJudge.from_azure", factory)
     path, _agent, revision = await setup_project(client)
@@ -337,6 +350,10 @@ async def test_new_judge_uses_one_explicit_configuration_snapshot(client, app, c
     assert response.status_code == 202, response.text
     result = await wait_for(client, path + "/evaluation-runs/" + response.json()["id"])
     assert result["gate"] == "pass", result
+    assert result["lineage"]["judge"]["auth"] == auth
+    assert result["lineage"]["judge"]["settings"] == {
+        **({} if temperature == "default" else {"temperature": 0}), "timeout": 60, "max_retries": 0,
+    }
     assert len(calls) == len(closed) == 2
     assert "original-key" not in json.dumps(result)
 

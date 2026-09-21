@@ -1,6 +1,7 @@
 import {
   startTransition,
   useDeferredValue,
+  useEffect,
   useState,
   type FormEvent,
 } from "react";
@@ -11,9 +12,13 @@ import {
   useDirty,
   useInstanceGuard,
   useProjectSearchParams as useSearchParams,
+  confirmDiscard,
 } from "../project";
 import { Check, Code2, Plus, Search, X } from "lucide-react";
 import { type CaseRecord, type CanonicalCase, type Feedback } from "../api";
+import { agentPresets } from "../agent-presets";
+import { ChecksEditor } from "../checks-editor";
+import { hasRequiredActionableCheck } from "../check-form";
 import {
   blankCanonical,
   buildCase,
@@ -141,6 +146,29 @@ export function CaseEditor({
       <form className="form-stack" onSubmit={submit}>
         {!advanced ? (
           <>
+            <label>
+              Synthetic fixture
+              <select
+                value={fields.fixtureVersion}
+                onChange={(event) => field("fixtureVersion", event.target.value)}
+              >
+                {Object.values(agentPresets).map((preset) => (
+                  <option
+                    key={preset.fixture_version}
+                    value={preset.fixture_version}
+                  >
+                    {preset.name} / {preset.fixture_version}
+                  </option>
+                ))}
+              </select>
+              <span className="field-hint">
+                Cases belong to the project. Choose the fixture matching the agent
+                revision you will evaluate.
+              </span>
+            </label>
+            {fields.fixtureVersion === "synthetic-powerplant-v1" && (
+              <Notice>{agentPresets["synthetic-powerplant-var"].hint}</Notice>
+            )}
             <div className="form-row">
               <label>
                 Case title
@@ -273,7 +301,17 @@ export function CaseEditor({
                 <button
                   type="button"
                   className="quiet-button"
-                  onClick={() => setAdvanced(true)}
+                  onClick={() => {
+                    setText(JSON.stringify(
+                      {
+                        ...blankCanonical,
+                        fixture_version: fields.fixtureVersion,
+                      },
+                      null,
+                      2,
+                    ));
+                    setAdvanced(true);
+                  }}
                 >
                   Start directly with JSON
                 </button>
@@ -301,6 +339,8 @@ export function CaseEditor({
                 check has <code>kind</code>, <code>required</code>,{" "}
                 <code>turn</code> (null or zero-based), and <code>config</code>.
                 Check IDs are optional.
+                {" "}Set fixture_version to synthetic-v1 for customer lookup or
+                synthetic-powerplant-v1 for VaR powerplant cases.
               </p>
               <JsonView
                 value={{
@@ -364,9 +404,11 @@ export function CaseEditor({
 function CaseReview({
   caseId,
   onEdit,
+  onEditChecks,
 }: {
   caseId: string;
   onEdit: (record: CaseRecord) => void;
+  onEditChecks: (record: CaseRecord) => void;
 }) {
   const api = useProjectApi();
   const { writeBlocked } = useProject();
@@ -382,6 +424,12 @@ function CaseReview({
   const approve = useMutation({
     mutationFn: () => {
       if (writeBlocked) throw new Error("Project writes are disabled.");
+      if (
+        !detail.data ||
+        detail.isFetching ||
+        !hasRequiredActionableCheck(detail.data.case)
+      )
+        throw new Error("Author at least one required actionable check before approval.");
       if (confirmedRevision !== detail.data?.case.revision || !reason.trim()) {
         throw new Error(
           "Review and confirm the current case revision before approval.",
@@ -443,26 +491,39 @@ function CaseReview({
             </div>
           </div>
         ))}
-        <h3>Authored checks</h3>
-        {!record.case.checks.length ? (
+        <SectionHeading
+          title="Authored checks"
+          action={
+            <button
+              className="button small secondary"
+              disabled={writeBlocked}
+              onClick={() => onEditChecks(record)}
+            >
+              {record.case.checks.length ? "Edit checks" : "Add checks"}
+            </button>
+          }
+        />
+        {!hasRequiredActionableCheck(record.case) && (
           <Notice tone="warning">
-            No checks authored. Review the evaluation requirements before
-            approval.
+            Approval requires at least one required actionable check.{" "}
+            {record.case.checks.length
+              ? "Use Edit checks to author or mark a valid expectation as required."
+              : "Use Add checks to author expectations."}{" "}
+            The server validates all checks before approval.
           </Notice>
-        ) : (
-          record.case.checks.map((check, index) => (
-            <details className="check-details" key={check.id || index}>
-              <summary>
-                <code>{check.kind}</code>
-                <span className="muted">
-                  {check.required ? "Required" : "Optional"} /{" "}
-                  {check.turn === null ? "All turns" : `Turn ${check.turn + 1}`}
-                </span>
-              </summary>
-              <JsonView value={check.config} />
-            </details>
-          ))
         )}
+        {record.case.checks.map((check, index) => (
+          <details className="check-details" key={check.id || index}>
+            <summary>
+              <code>{check.kind}</code>
+              <span className="muted">
+                {check.required ? "Required" : "Optional"} /{" "}
+                {check.turn === null ? "All turns" : `Turn ${check.turn + 1}`}
+              </span>
+            </summary>
+            <JsonView value={check.config} />
+          </details>
+        ))}
         <details className="help-details">
           <summary>Canonical case and provenance</summary>
           <JsonView value={record.case} />
@@ -512,6 +573,7 @@ function CaseReview({
               className="button align-start"
               disabled={
                 writeBlocked ||
+                !hasRequiredActionableCheck(record.case) ||
                 approve.isPending ||
                 confirmedRevision !== record.case.revision ||
                 !reason.trim() ||
@@ -660,7 +722,7 @@ function FeedbackReview({ feedback }: { feedback: Feedback }) {
 
 export default function Candidates() {
   const api = useProjectApi();
-  const { writeBlocked } = useProject();
+  const { writeBlocked, dirty } = useProject();
   const [params, setParams] = useSearchParams();
   const feedbackTab = params.get("tab") === "feedback";
   const selected = params.get("case");
@@ -668,6 +730,10 @@ export default function Candidates() {
   const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState("all");
   const [editor, setEditor] = useState<CaseRecord | "new" | null>(null);
+  const [checksEditor, setChecksEditor] = useState<CaseRecord | null>(null);
+  useEffect(() => {
+    setChecksEditor(null);
+  }, [selected, feedbackTab]);
   const [notice, setNotice] = useState("");
   const cases = useQuery({
     queryKey: api.key("cases"),
@@ -697,6 +763,8 @@ export default function Candidates() {
             className="button"
             disabled={writeBlocked}
             onClick={() => {
+              if (!confirmDiscard(dirty)) return;
+              setChecksEditor(null);
               setEditor("new");
               setNotice("");
             }}
@@ -723,6 +791,20 @@ export default function Candidates() {
         </button>
       </div>
       {notice && <Notice tone="success">{notice}</Notice>}
+      {checksEditor && (
+        <ChecksEditor
+          key={`${checksEditor.case.id}-${checksEditor.case.revision}`}
+          record={checksEditor}
+          onClose={() => setChecksEditor(null)}
+          onSaved={(record) => {
+            setChecksEditor(null);
+            setNotice(
+              "Candidate saved. Review and approve it explicitly before release.",
+            );
+            setParams(record.case.id ? { case: record.case.id } : {});
+          }}
+        />
+      )}
       {editor && (
         <CaseEditor
           key={
@@ -869,8 +951,20 @@ export default function Candidates() {
               </div>
             )}
           </section>
-          {selected && !editor && (
-            <CaseReview key={selected} caseId={selected} onEdit={setEditor} />
+          {selected && !editor && !checksEditor && (
+            <CaseReview
+              key={selected}
+              caseId={selected}
+              onEdit={(record) => {
+                if (confirmDiscard(dirty)) setEditor(record);
+              }}
+              onEditChecks={(record) => {
+                if (confirmDiscard(dirty)) {
+                  setNotice("");
+                  setChecksEditor(record);
+                }
+              }}
+            />
           )}
         </>
       )}

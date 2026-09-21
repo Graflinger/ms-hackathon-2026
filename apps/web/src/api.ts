@@ -9,8 +9,8 @@ export type CreateRun = Schemas["CreateRunV2"];
 export type AgentRevision = CreateRun["agent_revision_id"];
 export type Project = Schemas["ProjectRecord"];
 export type Agent = Schemas["AgentRecord"];
-export type Revision = Schemas["RevisionRecord"];
 export type AgentSpec = Schemas["AgentSpec"];
+export type Revision = Schemas["RevisionRecord"];
 export type Binding = Schemas["BindingRecord"];
 export type Metadata = Schemas["CreateMetadata"];
 export type MetadataPatch = Schemas["PatchMetadata"];
@@ -163,7 +163,10 @@ export function createProjectApi(
       request<Agent>(`/agents/${id(agentId)}`, json("PATCH", body)),
     revisions: (agentId: string, signal?: AbortSignal) =>
       request<Revision[]>(`/agents/${id(agentId)}/revisions`, { signal }),
-    createRevision: (agentId: string, body: Schemas["CreateRevision"]) =>
+    createRevision: (
+      agentId: string,
+      body: Schemas["CreateRevision"],
+    ) =>
       request<Revision>(`/agents/${id(agentId)}/revisions`, json("POST", body)),
     bindings: (signal?: AbortSignal) =>
       request<Binding[]>("/connection-bindings", { signal }),
@@ -256,12 +259,13 @@ export function createProjectApi(
       ),
     sessions: (signal?: AbortSignal) =>
       request<Session[]>("/chat-sessions", { signal }),
-    createSession: (title: string, agent_revision_id: AgentRevision) =>
+    createSession: (title: string, agent_revision_id: AgentRevision, mode: Mode = "mock") =>
       request<Session>(
         "/chat-sessions",
         json("POST", {
           title: title || undefined,
           agent_revision_id,
+          mode,
         } satisfies Schemas["CreateChatV2"]),
       ),
     session: (sessionId: string, signal?: AbortSignal) =>

@@ -92,7 +92,7 @@ async def test_bootstrap_required_and_idempotent(settings):
             assert await session.scalar(text("PRAGMA foreign_keys")) == 1
             assert await session.scalar(text("PRAGMA busy_timeout")) == 5000
             assert (await session.scalar(text("PRAGMA journal_mode"))).upper() == journal_mode()
-            assert await session.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
+            assert await session.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
     finally:
         await db.engine.dispose()
 

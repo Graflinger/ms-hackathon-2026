@@ -37,6 +37,7 @@ def resolve_binding(connection: AgentConnection, project_id: str, bindings: dict
 
 async def run_revision(
     case: Case, revision_id: str, spec: AgentSpec, mode: str = "mock", *, api_key: str | None = None,
+    history: list[dict] | None = None,
 ) -> Observation:
     """Execute a new invocation, validate observed identity, then pin its revision ID."""
     spec = AgentSpec.model_validate(spec.model_dump(mode="json"))
@@ -55,7 +56,11 @@ async def run_revision(
     if mode == "live":
         from .live import run_live
         observation = await run_live(case, spec.variant, connection=spec.connection,
-                                     api_key=api_key, instructions=spec.instructions)
+                                     api_key=api_key, instructions=spec.instructions,
+                                     adapter=spec.adapter, history=history)
+    elif spec.adapter == "synthetic-powerplant-var":
+        from .powerplant import run_powerplant
+        observation = await run_powerplant(case, revision=spec.variant)
     else:
         observation = await run_case(case, revision=spec.variant, mode=mode)
     observation = Observation.model_validate(observation.model_dump(mode="json"))

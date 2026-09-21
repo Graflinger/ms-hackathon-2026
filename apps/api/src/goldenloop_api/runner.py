@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from .config import clean, invocation_secrets
 from .db import ChatSession, MessageCommand, Release, ReleaseCase, Run, add_event
-from .judging import JudgeSnapshot, evaluate_with_judge, judge_lineage
+from .judging import JudgeSnapshot, evaluate_with_judge, judge_lineage, normalized_judge_lineage
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
 INCOMPATIBLE_EXECUTOR = "Pinned execution versions are unavailable; submit a new evaluation"
@@ -132,7 +132,7 @@ class Runner:
                 if not compatible_executor(run):
                     raise ValueError(INCOMPATIBLE_EXECUTOR)
                 revision, mode = run.agent_revision, run.mode
-                judging = run.lineage["judge"]
+                judging = normalized_judge_lineage(run.lineage["judge"])
                 cases = [
                     Case.model_validate(row.payload)
                     for row in (
@@ -162,9 +162,10 @@ class Runner:
                 if any(clean(case.model_dump(mode="json")) != case.model_dump(mode="json") for case in cases):
                     raise ValueError("Redaction policy changed; review a new revision before execution")
                 repetitions = run.lineage.get("repetitions", 1)
-                if judge_lineage(
+                current_judging = judge_lineage(
                     self.settings, cases, judging.get("selection", "none"), repetitions=repetitions
-                ) != judging:
+                )
+                if normalized_judge_lineage(current_judging) != judging:
                     raise ValueError("Judge configuration changed after submission")
                 judge_snapshot = None
                 if judging["configured"]:
@@ -172,7 +173,9 @@ class Runner:
                         endpoint=judging["endpoint"],
                         deployment=judging["model"],
                         api_version=judging["api_version"],
-                        api_key=os.environ["GOLDENLOOP_JUDGE_API_KEY"],
+                        auth=judging["auth"],
+                        temperature=judging["settings"].get("temperature"),
+                        api_key=os.environ["GOLDENLOOP_JUDGE_API_KEY"] if judging["auth"] == "api_key" else None,
                     )
                 spec, api_key, legacy_connection = None, None, None
                 if not run.legacy_workflow:
@@ -311,37 +314,83 @@ class Runner:
             add_event(session, "run:" + run_id, "status", {"status": status, "gate": "error"})
 
     async def execute_chat(self, command_id):
+        secret_token = None
         try:
             async with self.db.sessions() as session:
                 command = await session.get(MessageCommand, command_id)
                 if command.status != "running":
                     return
                 chat = await session.get(ChatSession, command.session_id)
-                turns = [Turn(user=m["content"]) for m in chat.messages if m["role"] == "user"]
-                turns.append(Turn(user=command.content))
-                case = Case(id=chat.id, title=chat.title, turns=turns, source={"synthetic": True})
+                spec = None if chat.legacy_workflow else AgentSpec.model_validate(chat.pinned_revision.spec)
+                if spec is not None and agent_spec_hash(spec) != chat.pinned_revision.spec_hash:
+                    raise ValueError("Agent specification lineage mismatch")
+                mode = chat.mode
+                if mode not in {"mock", "live"} or (spec is None and mode != "mock"):
+                    raise ValueError("Unsupported chat execution mode")
+                invocation = {}
+                if spec is not None:
+                    from .registry import execution_key, validate_capabilities
+
+                    validate_capabilities(spec, [], mode)
+                    if clean(spec.model_dump(mode="json")) != spec.model_dump(mode="json"):
+                        raise ValueError("Agent specification redaction policy changed")
+                    api_key = execution_key(spec, chat.project_id, mode, self.settings)
+                    secret_token = invocation_secrets.set((api_key,) if api_key else ())
+                    if mode == "live":
+                        invocation = {
+                            "api_key": api_key,
+                            "history": clean(
+                                [
+                                    {"role": m["role"], "content": m["content"]}
+                                    for m in chat.messages
+                                    if m["role"] in {"user", "assistant"}
+                                ]
+                            ),
+                        }
+                current = Case(
+                    id=chat.id,
+                    title=chat.title,
+                    turns=[Turn(user=clean(command.content))],
+                    fixture_version=spec.fixture_version if spec is not None else "synthetic-v1",
+                    source={"synthetic": True},
+                )
+                if mode == "mock" and spec is not None and spec.adapter == "synthetic-powerplant-var":
+                    # Category follow-ups need user history, not reference answers or replayed tools.
+                    current.context = clean(
+                        "\n".join(m["content"] for m in chat.messages if m["role"] == "user")
+                    )
                 revision, turn, chat_id = chat.agent_revision, command.turn, chat.id
                 prior = next(
                     (m["content"] for m in reversed(chat.messages) if m["role"] == "assistant"), None
                 )
-                current = case.model_copy(update={"turns": [turns[-1]]})
-                spec = None if chat.legacy_workflow else AgentSpec.model_validate(chat.pinned_revision.spec)
-                if spec is not None and agent_spec_hash(spec) != chat.pinned_revision.spec_hash:
-                    raise ValueError("Agent specification lineage mismatch")
             async with asyncio.timeout(self.settings.case_timeout):
                 observation = bounded_observation(
-                    await run_revision(current, revision_id=revision, spec=spec, mode="mock")
+                    await run_revision(current, revision_id=revision, spec=spec, mode=mode, **invocation)
                     if spec is not None
                     else await run_case(current, revision=revision, mode="mock"),
                     current,
                     revision,
-                    "mock",
+                    mode,
                 )
-            if observation.error or not observation.trace_complete:
+            failed = (
+                observation.error is not None
+                or not observation.trace_complete
+                or any(call.error is not None for call in observation.tool_calls)
+            )
+            if failed and mode != "live":
                 raise ValueError("Chat execution failed")
             messages = observation.messages
+            roles = [m.get("role") for m in messages]
+            # A failed live invocation may stop before its user/assistant pair is complete.
+            # Retain only bounded, current-turn evidence; never invent a missing answer.
+            valid_roles = (
+                roles in ([], ["user"], ["user", "assistant"])
+                if failed
+                else roles == ["user", "assistant"]
+            )
             if (
-                [m.get("role") for m in messages] != ["user", "assistant"]
+                not valid_roles
+                or any(not isinstance(m.get("content"), str) for m in messages)
                 or any(m.get("turn") != 0 for m in messages)
                 or any(call.turn != 0 for call in observation.tool_calls)
             ):
@@ -349,7 +398,12 @@ class Runner:
             # This mock agent's no-tool follow-up echoes its last generated answer. Continue from
             # the persisted answer, never reexecute earlier lookups or regenerate their outputs.
             # A live/stateful agent must supply a real history-aware adapter instead of this rule.
-            if prior is not None and not observation.tool_calls:
+            if (
+                mode == "mock"
+                and (spec is None or spec.adapter == "synthetic-customer")
+                and prior is not None
+                and not observation.tool_calls
+            ):
                 messages[1]["content"] = "From my previous answer: " + prior
             for message in messages:
                 message["turn"] = turn
@@ -372,13 +426,15 @@ class Runner:
             async with self.db.write() as session:
                 command = await session.get(MessageCommand, command_id)
                 chat = await session.get(ChatSession, chat_id)
-                command.status, chat.status, chat.error = "completed", "completed", None
+                status = "failed" if failed else "completed"
+                command.status, chat.status = status, status
+                chat.error = "Chat execution failed or timed out" if failed else None
                 for index, message in enumerate(messages):
                     message["id"] = f"{command_id}:{index}"
                     message["command_id"] = command_id
                 chat.messages = clean([*chat.messages, *messages])
                 chat.tool_calls = clean([*chat.tool_calls, *calls])
-                chat.trace_complete = observation.trace_complete
+                chat.trace_complete = not failed
                 for message in messages:
                     add_event(session, "chat:" + chat_id, "message", message)
                 for call in calls:
@@ -387,13 +443,16 @@ class Runner:
                     session,
                     "chat:" + chat_id,
                     "status",
-                    {"status": "completed", "id": command_id, "trace_complete": chat.trace_complete},
+                    {"status": status, "id": command_id, "trace_complete": chat.trace_complete},
                 )
         except asyncio.CancelledError:
             await self.fail_chat(command_id, "interrupted")
             raise
         except Exception:  # noqa: BLE001 - never expose provider exception text to chat clients
             await self.fail_chat(command_id, "failed")
+        finally:
+            if secret_token is not None:
+                invocation_secrets.reset(secret_token)
 
     async def fail_chat(self, command_id, status):
         async with self.db.write() as session:

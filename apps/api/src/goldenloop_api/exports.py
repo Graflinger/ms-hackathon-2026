@@ -2,7 +2,15 @@ import io
 import json
 import zipfile
 
-from goldenloop_eval import SDK_VERSION, AgentSpec, BundleManifest, BundleManifestV2, Case, release_hash
+from goldenloop_eval import (
+    SDK_VERSION,
+    AgentSpec,
+    BundleManifest,
+    BundleManifestV2,
+    Case,
+    azure_judge_snapshot,
+    release_hash,
+)
 
 from .config import clean
 
@@ -79,15 +87,13 @@ def export_bundle_v2(release, cases, revision, mode, judging):
         raise ValueError("Release redaction policy changed")
     judge = {"selection": "none"}
     if judging["selection"] == "azure":
-        judge = {
-            "selection": "azure",
-            "provider": judging["provider"],
-            "endpoint": judging["endpoint"],
-            "deployment": judging["model"],
-            "api_version": judging["api_version"],
-            "prompt_version": judging["prompt_version"],
-            "settings": {"temperature": 0},
-        }
+        judge = azure_judge_snapshot(
+            endpoint=judging["endpoint"],
+            deployment=judging["model"],
+            api_version=judging["api_version"],
+            auth=judging.get("auth", "api_key"),
+            temperature=judging["settings"].get("temperature"),
+        )
     manifest = BundleManifestV2(
         project_id=release.project_id,
         release_id=release.id,
@@ -131,8 +137,14 @@ def test_release():
         files[".env.example"] += (
             f"GOLDENLOOP_JUDGE_ENDPOINT={judge['endpoint']}\n"
             f"GOLDENLOOP_JUDGE_DEPLOYMENT={judge['deployment']}\n"
-            f"GOLDENLOOP_JUDGE_API_VERSION={judge['api_version']}\nGOLDENLOOP_JUDGE_API_KEY=\n"
+            f"GOLDENLOOP_JUDGE_API_VERSION={judge['api_version']}\n"
+            f"GOLDENLOOP_JUDGE_AUTH={judge['auth']}\n"
+            f"GOLDENLOOP_JUDGE_TEMPERATURE={'0' if 'temperature' in judge['settings'] else 'default'}\n"
         )
+        if judge["auth"] == "api_key":
+            files[".env.example"] += "GOLDENLOOP_JUDGE_API_KEY=\n"
+        else:
+            files[".env.example"] += "# Run az login in the execution environment for Azure CLI judge authentication.\n"
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():

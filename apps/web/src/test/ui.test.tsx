@@ -100,6 +100,50 @@ describe("overview API integration", () => {
 });
 
 describe("candidate form", () => {
+  it.each(["simple", "converted JSON", "blank JSON"])("keeps the selected VaR fixture in %s authoring", async (mode) => {
+    const create = vi.spyOn(api, "createCase").mockImplementation(async (value) => ({
+      case: { ...value, id: "powerplant-case" },
+      status: "candidate",
+      reviewer: null,
+      reason: null,
+    }));
+    renderWithClient(<CaseEditor onSaved={vi.fn()} onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    expect(screen.getByLabelText(/^Synthetic fixture/)).toHaveValue("synthetic-v1");
+    await user.selectOptions(screen.getByLabelText(/^Synthetic fixture/), "synthetic-powerplant-v1");
+    if (mode === "blank JSON") {
+      await user.click(screen.getByRole("button", { name: "Start directly with JSON" }));
+      const editor = screen.getByLabelText("Canonical case JSON") as HTMLTextAreaElement;
+      const value = JSON.parse(editor.value);
+      expect(value.fixture_version).toBe("synthetic-powerplant-v1");
+      fireEvent.change(editor, { target: { value: JSON.stringify({ ...value, title: "Incidents", turns: [{ user: "List incidents" }] }) } });
+    } else {
+      await user.type(screen.getByLabelText("Case title"), "Incidents");
+      await user.type(screen.getByLabelText("User message"), "List incidents");
+      if (mode === "converted JSON") {
+        await user.click(screen.getByRole("button", { name: "Continue in canonical JSON" }));
+      }
+    }
+    await user.click(screen.getByRole("button", { name: "Save candidate" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({ fixture_version: "synthetic-powerplant-v1", checks: [] });
+  });
+
+  it("preserves the powerplant fixture when editing an existing case revision", async () => {
+    const record = {
+      case: { ...blankCanonical, id: "powerplant-case", title: "Incidents", turns: [{ user: "List incidents" }], fixture_version: "synthetic-powerplant-v1" },
+      status: "candidate" as const,
+      reviewer: null,
+      reason: null,
+    };
+    const update = vi.spyOn(api, "updateCase").mockResolvedValue(record);
+    renderWithClient(<CaseEditor record={record} onSaved={vi.fn()} onClose={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Revision reason"), "Reviewed incident inputs");
+    await user.click(screen.getByRole("button", { name: "Save new candidate revision" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(record.case.id, record.case, 1, "Reviewed incident inputs"));
+  });
+
   it("creates an unapproved candidate without automatically checking a reference answer", async () => {
     const create = vi
       .spyOn(api, "createCase")
@@ -162,6 +206,45 @@ describe("candidate form", () => {
 });
 
 describe("review and execution boundaries", () => {
+  it("renders live assistant tables and keeps the session mode pinned on message failure", async () => {
+    const content = "Synthetic ratings.\n| Incident | Risk |\n| --- | --- |\n| Pump | High |";
+    const session = {
+      ...execution,
+      id: "table-session",
+      title: "VaR incidents",
+      agent_revision: execution.agent_revision_id,
+      mode: "live" as const,
+      created_at: "2026-09-08",
+      status: "completed",
+      error: null,
+      trace_complete: true,
+      messages: [
+        { id: "user-message", command_id: "command-one", role: "user", content, turn: 0 },
+        { id: "assistant-message", command_id: "command-one", role: "assistant", content, turn: 0 },
+      ],
+      tool_calls: [],
+    };
+    mockRegistry();
+    vi.spyOn(api, "sessions").mockResolvedValue([session]);
+    vi.spyOn(api, "session").mockResolvedValue(session);
+    const send = vi.spyOn(api, "sendMessage").mockRejectedValue(new Error("Foundry request failed"));
+    const create = vi.spyOn(api, "createSession");
+    renderWithClient(<Playground />, "/playground?session=table-session");
+    expect(await screen.findByRole("cell", { name: "Pump" })).toBeVisible();
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    expect(screen.getByText(/\| Pump \| High \|/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Give answer feedback" })).toBeEnabled();
+    expect(screen.getByText("Live — Foundry LLM", { selector: "strong" })).toBeVisible();
+    expect(screen.queryByLabelText("Session execution mode")).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Your next turn"), "Inspect the pump");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Foundry request failed");
+    expect(send).toHaveBeenCalledExactlyOnceWith("table-session", "Inspect the pump");
+    expect(create).not.toHaveBeenCalled();
+    expect(screen.getByText("Live — Foundry LLM", { selector: "strong" })).toBeVisible();
+  });
+
   const value = {
     ...blankCanonical,
     id: "case-one",

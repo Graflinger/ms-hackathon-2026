@@ -8,9 +8,11 @@ import {
 } from "../project";
 import { useEventRefresh } from "../event-stream";
 import { AgentSelector, ExecutionIdentity } from "../agent-selector";
+import { AssistantContent } from "../assistant-content";
 import { Flag, MessageSquare, Plus, Send, Wrench } from "lucide-react";
 import {
   type Revision,
+  type Mode,
   type FeedbackInput,
   type Session,
   type ToolCall,
@@ -300,6 +302,11 @@ function Conversation({
         />
         <div className="detail-body">
           <ExecutionIdentity value={data} />
+          <p>
+            Session mode: <strong>{data.mode === "live" ? "Live — Foundry LLM" : "Mock — test only"}</strong>.
+            {" "}Mode and agent revision are pinned for this conversation.
+            Start a new session to change them.
+          </p>
           {readOnly && (
             <Notice>
               New messages are disabled while the project or agent is archived,
@@ -333,7 +340,11 @@ function Conversation({
                   <span>{item.role === "assistant" ? "Agent" : item.role}</span>
                   <small>Turn {item.turn + 1}</small>
                 </div>
-                <p>{item.content}</p>
+                {item.role === "assistant" ? (
+                  <AssistantContent content={item.content} />
+                ) : (
+                  <p>{item.content}</p>
+                )}
                 {item.role === "assistant" && (
                   <div className="message-actions">
                     <button
@@ -526,13 +537,22 @@ export default function Playground() {
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [revision, setRevision] = useState<Revision | null>(null);
+  const [mode, setMode] = useState<Mode | "">("mock");
+  const isVaR = revision?.spec.adapter === "synthetic-powerplant-var";
+  const modeAvailable = !!mode && !!revision?.spec.modes?.includes(mode);
+  const connection = revision?.spec.connection;
+  const liveConfigured = mode !== "live" || !!(
+    connection?.binding && connection.endpoint &&
+    connection.deployment.trim() && connection.api_version.trim()
+  );
   const clearDirty = useDirty(creating && (!!title || !!revision));
   const sessions = useQuery({
     queryKey: api.key("sessions"),
     queryFn: ({ signal }) => api.sessions(signal),
   });
   const create = useMutation({
-    mutationFn: () => api.createSession(title.trim(), revision!.id),
+    mutationFn: () => api.createSession(title.trim(), revision!.id, mode as Mode),
+    retry: false,
     onSuccess: (session: Session) => {
       client.invalidateQueries({ queryKey: api.key("sessions") });
       clearDirty();
@@ -541,12 +561,13 @@ export default function Playground() {
       setTitle("");
     },
   });
+  const canCreate = !!revision && modeAvailable && liveConfigured && !writeBlocked && !create.isPending;
   return (
     <>
       <PageHeader
         eyebrow="02 / OBSERVE THE AGENT"
         title="Follow the conversation."
-        description="Explore deterministic demo-agent revisions. Inspect the answer, examine the tools, and turn observations into reviewable feedback."
+        description="Explore agent revisions with live Foundry LLMs or mock test execution. Inspect answers and tools, then turn observations into reviewable feedback."
         action={
           <button
             className="button"
@@ -559,8 +580,10 @@ export default function Playground() {
         }
       />
       <Notice>
-        Demo sessions use synthetic fixtures. The agent revision is fixed for
-        each session; a cloud connection is not implied.
+        Sessions use synthetic, read-only tools. Live mode calls the real Foundry
+        LLM and may incur costs; mock mode is for tests only. The selected mode
+        and agent revision are pinned for each session. Live errors never fall
+        back to mock execution.
       </Notice>
       {creating && (
         <section className="panel">
@@ -569,7 +592,7 @@ export default function Playground() {
             className="form-stack"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!revision || writeBlocked || create.isPending) return;
+              if (!canCreate) return;
               create.mutate();
             }}
           >
@@ -585,15 +608,65 @@ export default function Playground() {
             </div>
             <AgentSelector
               value={revision}
-              onChange={setRevision}
+              onChange={(next) => {
+                setRevision(next);
+                create.reset();
+                setMode(
+                  next?.spec.adapter === "synthetic-powerplant-var"
+                    ? next.spec.modes?.includes("live") ? "live" : ""
+                    : next?.spec.modes?.includes("mock") ? "mock"
+                      : next?.spec.modes?.includes("live") ? "live" : "mock",
+                );
+              }}
               purpose="chat"
               disabled={create.isPending || writeBlocked}
             />
+            <label>
+              Session execution mode
+              <select
+                value={mode}
+                disabled={!revision || create.isPending || writeBlocked}
+                onChange={(event) => {
+                  setMode(event.target.value as Mode | "");
+                  create.reset();
+                }}
+              >
+                <option value="">Select an execution mode</option>
+                <option value="live" disabled={!revision?.spec.modes?.includes("live")}>
+                  Live — Foundry LLM
+                </option>
+                <option value="mock" disabled={!revision?.spec.modes?.includes("mock")}>
+                  Mock — test only (no LLM)
+                </option>
+              </select>
+            </label>
+            {isVaR && !revision.spec.modes?.includes("live") && (
+              <Notice tone="warning">
+                This VaR revision supports mock tests only. VaR exploration requires
+                a real Foundry LLM. Create a live revision with an approved Foundry
+                binding, deployment and API version, then select it here.
+                {" "}<TextLink to={`/agents?agent=${encodeURIComponent(revision.agent_id)}`}>
+                  Configure a live VaR revision
+                </TextLink>
+              </Notice>
+            )}
+            {mode === "live" && (
+              <Notice tone={liveConfigured ? "info" : "warning"}>
+                {liveConfigured
+                  ? "This session will call the real Foundry LLM using the revision's approved binding. Provider/configuration errors will be shown without mock fallback."
+                  : "Live execution requires a revision with an approved Foundry binding, deployment and API version. Configure a new live revision before creating this session."}
+                {!liveConfigured && revision && (
+                  <>{" "}<TextLink to={`/agents?agent=${encodeURIComponent(revision.agent_id)}`}>
+                    Configure a live revision
+                  </TextLink></>
+                )}
+              </Notice>
+            )}
             {create.error && <ErrorState error={create.error} />}
             <div className="form-actions">
               <button
                 className="button"
-                disabled={writeBlocked || !revision || create.isPending}
+                disabled={!canCreate}
               >
                 {create.isPending ? "Creating..." : "Create session"}
               </button>
@@ -645,7 +718,7 @@ export default function Playground() {
                 {sessions.data.map((session) => (
                   <option key={session.id} value={session.id}>
                     {session.title || "Untitled session"} / {session.agent_name}{" "}
-                    / {session.agent_revision_label} / {session.id.slice(0, 8)}
+                    / {session.agent_revision_label} / {session.mode === "live" ? "Live — Foundry LLM" : "Mock — test only"} / {session.id.slice(0, 8)}
                   </option>
                 ))}
               </select>

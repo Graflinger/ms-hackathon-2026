@@ -87,7 +87,8 @@ async def run_bundle(
             raise ValueError("Bundle preflight failed: unsafe execution data or configuration") from None
         results = await run_cases(cases, runner, revision=manifest.agent_revision,
                                   mode=manifest.mode, judge=judge, timeout=timeout, secrets=secrets)
+        secrets = (*secrets, *getattr(judge, "secrets", ()))
         return build_report(results, secrets=secrets, **lineage)
     finally:
         if judge is not None:
-            judge.client.close()
+            judge.close()

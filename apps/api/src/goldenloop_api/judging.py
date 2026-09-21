@@ -4,12 +4,12 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from goldenloop_eval import JUDGE_PROMPT_VERSION, Case, Check, Observation, OpenAIJudge, evaluate
+from goldenloop_eval import Case, Check, Observation, OpenAIJudge, azure_judge_snapshot_from_env, evaluate
+from goldenloop_eval.agents import resource_origin
 
-from .config import clean
+from .config import clean, invocation_secrets
 
 
 @dataclass(frozen=True, repr=False)
@@ -17,7 +17,18 @@ class JudgeSnapshot:
     endpoint: str
     deployment: str
     api_version: str
-    api_key: str
+    api_key: str | None = None
+    auth: str = "api_key"
+    temperature: float | None = 0
+
+
+def normalized_judge_lineage(lineage: dict) -> dict:
+    """Compare historical Azure runs as key-auth without rewriting their evidence."""
+    normalized = dict(lineage)
+    if normalized.get("selection") == "azure":
+        normalized.setdefault("auth", "api_key")
+        normalized["endpoint"] = resource_origin(normalized["endpoint"])
+    return normalized
 
 
 def judge_lineage(
@@ -42,35 +53,29 @@ def judge_lineage(
                 409, "Required judge checks need explicit judge='azure' and configured synthetic judging"
             )
         return {"configured": False, "selection": "none"}
-    keys = (
-        "GOLDENLOOP_JUDGE_ENDPOINT",
-        "GOLDENLOOP_JUDGE_DEPLOYMENT",
-        "GOLDENLOOP_JUDGE_API_VERSION",
-        "GOLDENLOOP_JUDGE_API_KEY",
-    )
-    if (execution and not settings.allow_live_judge) or any(
-        not os.getenv(key) for key in (keys if execution else keys[:3])
-    ):
+    if execution and not settings.allow_live_judge:
         raise HTTPException(
             409,
             "Azure judging requires GOLDENLOOP_ALLOW_LIVE_SYNTHETIC_JUDGE=true and GOLDENLOOP_JUDGE_* configuration",
         )
     try:
-        endpoint = urlsplit(os.environ[keys[0]])
-        valid = (
-            endpoint.scheme == "https"
-            and endpoint.hostname
-            and not endpoint.username
-            and not endpoint.password
-            and not endpoint.query
-            and not endpoint.fragment
-        )
+        snapshot = azure_judge_snapshot_from_env()
     except ValueError:
-        valid = False
-    if not valid or (execution and importlib.util.find_spec("openai") is None):
         raise HTTPException(
-            409, "Azure judging requires a credential-free HTTPS endpoint and goldenloop-eval[live]"
-        )
+            409, "Azure judging requires a credential-free HTTPS endpoint, deployment, API version, "
+            "GOLDENLOOP_JUDGE_AUTH=api_key (default) or azure_cli, "
+            "and GOLDENLOOP_JUDGE_TEMPERATURE=0 (default) or default"
+        ) from None
+    if execution:
+        if snapshot["auth"] == "api_key" and not os.getenv("GOLDENLOOP_JUDGE_API_KEY", "").strip():
+            raise HTTPException(409, "Azure judging requires GOLDENLOOP_JUDGE_API_KEY for api_key auth")
+        dependencies = ("openai", "azure.identity") if snapshot["auth"] == "azure_cli" else ("openai",)
+        try:
+            installed = all(importlib.util.find_spec(name) is not None for name in dependencies)
+        except (ImportError, ValueError):
+            installed = False
+        if not installed:
+            raise HTTPException(409, "Azure judging requires goldenloop-eval[live] dependencies")
     if not checks or len(checks) * repetitions > settings.max_judge_calls:
         raise HTTPException(
             422,
@@ -82,11 +87,12 @@ def judge_lineage(
         "selection": "azure",
         "provider": "azure-openai",
         "mode": "live",
-        "model": os.environ[keys[1]],
-        "endpoint": os.environ[keys[0]],
-        "api_version": os.environ[keys[2]],
-        "prompt_version": JUDGE_PROMPT_VERSION,
-        "settings": {"temperature": 0, "timeout": 60, "max_retries": 0},
+        "model": snapshot["deployment"],
+        "endpoint": snapshot["endpoint"],
+        "api_version": snapshot["api_version"],
+        "auth": snapshot["auth"],
+        "prompt_version": snapshot["prompt_version"],
+        "settings": {**snapshot["settings"], "timeout": 60, "max_retries": 0},
         "checks": checks,
     }
     safe = clean(lineage)
@@ -100,6 +106,9 @@ def judge_lineage(
 async def evaluate_with_judge(case, observation, lineage, deadline, snapshot: JudgeSnapshot):
     """Keep the synchronous SDK client in its worker, including cleanup after cancellation."""
     stopped = threading.Event()
+    # Worker ContextVar changes do not reach the awaiting runner. Keep discovered
+    # credentials local, then transfer them only after the worker has finished.
+    discovered_secrets = []
 
     def score():
         if stopped.is_set() or time.monotonic() >= deadline:
@@ -109,23 +118,33 @@ async def evaluate_with_judge(case, observation, lineage, deadline, snapshot: Ju
             deployment=snapshot.deployment,
             api_version=snapshot.api_version,
             api_key=snapshot.api_key,
+            auth=snapshot.auth,
+            temperature=snapshot.temperature,
         )
         try:
             if judge.model != lineage["model"] or judge.provider != lineage["provider"]:
                 raise ValueError("Judge lineage mismatch")
 
-            def bounded_judge(case, observation, check):
-                if stopped.is_set() or time.monotonic() >= deadline:
-                    raise TimeoutError("Judge run deadline exceeded")
-                return judge(
-                    Case.model_validate(clean(case.model_dump(mode="json"))),
-                    Observation.model_validate(clean(observation.model_dump(mode="json"))),
-                    Check.model_validate(clean(check.model_dump(mode="json"))),
-                )
+            class BoundedJudge:
+                @property
+                def secrets(self):
+                    return judge.secrets
 
-            return evaluate(case, observation, judge=bounded_judge)
+                def __call__(self, case, observation, check):
+                    if stopped.is_set() or time.monotonic() >= deadline:
+                        raise TimeoutError("Judge run deadline exceeded")
+                    return judge(
+                        Case.model_validate(clean(case.model_dump(mode="json"))),
+                        Observation.model_validate(clean(observation.model_dump(mode="json"))),
+                        Check.model_validate(clean(check.model_dump(mode="json"))),
+                    )
+
+            return evaluate(case, observation, judge=BoundedJudge())
         finally:
-            judge.client.close()
+            try:
+                discovered_secrets.extend(judge.secrets)
+            finally:
+                judge.close()
 
     task = asyncio.create_task(asyncio.to_thread(score))
     try:
@@ -136,3 +155,8 @@ async def evaluate_with_judge(case, observation, lineage, deadline, snapshot: Ju
         stopped.set()
         await asyncio.gather(task, return_exceptions=True)
         raise
+    finally:
+        # This runs in the caller's task, before it sanitizes the original agent
+        # observation/results or persists a failure. Runner resets its context
+        # at the end of the invocation; credentials never enter result models.
+        invocation_secrets.set(tuple(dict.fromkeys((*invocation_secrets.get(), *discovered_secrets))))

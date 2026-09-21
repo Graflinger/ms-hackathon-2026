@@ -17,6 +17,7 @@ export interface SimpleCaseFields {
   tags: string;
   datasetSplit: DatasetSplit;
   context: string;
+  fixtureVersion: string;
 }
 export const emptyFields: SimpleCaseFields = {
   title: "",
@@ -30,6 +31,7 @@ export const emptyFields: SimpleCaseFields = {
   tags: "",
   datasetSplit: "development",
   context: "",
+  fixtureVersion: "synthetic-v1",
 };
 export const checkKinds: CheckKind[] = [
   "content_contains",
@@ -107,7 +109,7 @@ export function buildCase(fields: SimpleCaseFields): CanonicalCase {
       },
     ],
     checks,
-    fixture_version: "synthetic-v1",
+    fixture_version: fields.fixtureVersion,
   };
 }
 

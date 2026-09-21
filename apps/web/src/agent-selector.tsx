@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type Revision, type Run, type Session } from "./api";
 import { useProjectApi } from "./project";
 import { ErrorState, Loading, Notice, TextLink } from "./components";
+import { agentPresets } from "./agent-presets";
 
 export function AgentSelector({
   value,
@@ -39,7 +40,7 @@ export function AgentSelector({
   }, [agents.data, agents.isError, purpose, value, onChange]);
   const compatible = (revision: Revision) =>
     purpose !== "chat" ||
-    (revision.spec.modes?.includes("mock") &&
+    (revision.spec.modes?.some((mode) => mode === "mock" || mode === "live") &&
       revision.spec.supports_multi_turn &&
       revision.spec.trace_available);
   return (
@@ -124,6 +125,9 @@ export function AgentSelector({
             {value.spec.adapter} / {value.spec.variant} /{" "}
             {value.spec.modes?.join(", ")} / {value.spec.fixture_version}
           </span>
+          {value.spec.adapter === "synthetic-powerplant-var" && (
+            <span>{agentPresets["synthetic-powerplant-var"].hint}</span>
+          )}
           <span>
             {value.spec.supports_multi_turn ? "Multi-turn" : "Single-turn"} /{" "}
             {value.spec.trace_available

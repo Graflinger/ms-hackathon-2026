@@ -1,0 +1,20 @@
+GoldenLoop
+From scattered knowledge to repeatable AI evaluation
+
+Building an AI agent demo is one thing. Knowing whether it is reliable—and whether a change actually makes it better—is another.
+
+Meaningful evaluation requires realistic scenarios, clear expectations, and evidence of how an agent behaves. Yet this information is often scattered across spreadsheets, conversations, and the experience of domain experts. Without a dedicated solution, collecting it and turning it into repeatable tests becomes a manual, technical, and fragmented process.
+
+GoldenLoop is an end-to-end evaluation workbench that lowers the barrier between domain expertise and automated AI testing. Non-technical contributors can keep working with familiar tools such as Excel, while developers gain structured, versioned evaluation datasets and tests they can run both in the application and in CI/CD.
+
+Our demo follows an agent called VaR through this workflow:
+
+- Collect: Import scenarios from Excel or CSV, and discover additional cases through multi-turn conversations in the playground.
+- Inspect: Examine answers and observable tool calls, including parameters, results, and errors. Capture feedback on both the response and the agent’s actions.
+- Review: Turn imports and feedback into editable candidates. Reviewers validate expectations before promoting cases into immutable golden dataset releases—because an observed answer or an unreviewed correction is not automatically ground truth.
+- Evaluate: Test VaR using deterministic answer and tool checks alongside AI-as-a-judge assessments, keeping observable evidence, reviewer expectations, and judge opinions distinct.
+- Automate: Export self-contained test bundles that use the same evaluation SDK in isolated CI/CD environments, without requiring the GoldenLoop workbench to be running.
+
+Built with React, Python, and FastAPI, GoldenLoop takes a Microsoft-first approach, with a demo agent built on Microsoft Agent Framework and support for models through Microsoft Foundry. The hackathon demonstration uses clearly labeled synthetic data.
+
+GoldenLoop connects the people who know what “good” looks like with the systems that need to test it—turning everyday knowledge into reviewed expectations and repeatable quality gates.

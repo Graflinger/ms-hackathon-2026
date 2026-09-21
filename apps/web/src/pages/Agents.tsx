@@ -26,6 +26,11 @@ import {
   Status,
 } from "../components";
 import { MetadataForm } from "./Projects";
+import {
+  adapterContract,
+  agentPresets,
+  type SupportedAdapter,
+} from "../agent-presets";
 
 export const defaultSpec: AgentSpec = {
   schema_version: "1",
@@ -50,12 +55,13 @@ export function parseAgentSpec(text: string, bindings: Binding[]): AgentSpec {
       "Unknown specification field. Secret values and arbitrary configuration are not accepted.",
     );
   if (
-    spec.adapter !== "synthetic-customer" ||
+    typeof spec.adapter !== "string" ||
+    !Object.hasOwn(agentPresets, spec.adapter) ||
     spec.artifact !== defaultSpec.artifact ||
     !["fixed", "buggy"].includes(spec.variant)
   )
     throw new Error(
-      "Use the supported synthetic-customer adapter, pinned 0.2.0 artifact, and fixed or buggy variant.",
+      "Use synthetic-customer or synthetic-powerplant-var, the pinned 0.2.0 artifact, and fixed or buggy variant.",
     );
   if (
     !Array.isArray(spec.modes) ||
@@ -64,16 +70,17 @@ export function parseAgentSpec(text: string, bindings: Binding[]): AgentSpec {
     new Set(spec.modes).size !== spec.modes.length
   )
     throw new Error("Modes must contain mock and/or live without duplicates.");
+  const preset = agentPresets[spec.adapter as SupportedAdapter];
   if (
     spec.schema_version !== "1" ||
-    spec.fixture_version !== "synthetic-v1" ||
-    spec.tool_contract !== "customer-lookup-v1" ||
+    spec.fixture_version !== preset.fixture_version ||
+    spec.tool_contract !== preset.tool_contract ||
     typeof spec.instructions !== "string" ||
     typeof spec.supports_multi_turn !== "boolean" ||
     typeof spec.trace_available !== "boolean"
   )
     throw new Error(
-      "Use schema version 1, synthetic-v1 fixtures, customer-lookup-v1 tools, string instructions and boolean capability declarations.",
+      `Use schema version 1, ${preset.fixture_version} fixtures, ${preset.tool_contract} tools, string instructions and boolean capability declarations.`,
     );
   if (spec.connection != null) {
     const c = spec.connection;
@@ -167,6 +174,11 @@ function RevisionEditor({
   function patch(value: Partial<AgentSpec>) {
     setSpec((previous) => ({ ...previous, ...value }));
   }
+  const liveFieldsIncomplete = !advanced && spec.modes?.includes("live") && (
+    !spec.connection?.binding ||
+    !spec.connection.deployment.trim() ||
+    !spec.connection.api_version.trim()
+  );
   return (
     <section className="panel">
       <SectionHeading
@@ -214,11 +226,36 @@ function RevisionEditor({
             <>
               <label>
                 Adapter
-                <input
-                  readOnly
-                  value="synthetic-customer / goldenloop-demo-agent==0.2.0"
-                />
+                <select
+                  value={spec.adapter}
+                  onChange={(e) =>
+                    patch(adapterContract(e.target.value as SupportedAdapter))
+                  }
+                >
+                  {Object.entries(agentPresets).map(([id, preset]) => (
+                    <option key={id} value={id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">
+                  {agentPresets[spec.adapter ?? "synthetic-customer"].hint}
+                </span>
               </label>
+              {spec.adapter === "synthetic-powerplant-var" && !spec.modes?.includes("live") && (
+                <Notice tone="warning">
+                  VaR requires a live Foundry LLM for exploration. This specification
+                  currently supports mock tests only. Configure an approved Foundry
+                  binding, deployment and API version to enable live execution.
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={() => patch({ modes: ["mock", "live"] })}
+                  >
+                    Configure Foundry live execution
+                  </button>
+                </Notice>
+              )}
               <label>
                 Behavior variant
                 <select
@@ -273,7 +310,8 @@ function RevisionEditor({
                   ) : !bindings.data.length ? (
                     <Notice tone="warning">
                       No server-approved bindings for this project. Ask the
-                      operator to configure one, or use mock mode.
+                      operator to configure a Foundry binding. Mock mode is
+                      available for tests only; it does not call an LLM.
                     </Notice>
                   ) : null}
                   <label>
@@ -348,10 +386,17 @@ function RevisionEditor({
                       </div>
                     </>
                   )}
+                  {liveFieldsIncomplete && (
+                    <p className="field-hint" role="status">
+                      To create a live revision, select an approved binding and
+                      enter its Foundry deployment name and API version.
+                    </p>
+                  )}
                 </>
               )}
               <p className="field-hint">
-                Defaults: synthetic-v1 fixtures, customer-lookup-v1 tools,
+                {spec.artifact}. Defaults: {spec.fixture_version} fixtures,{" "}
+                {spec.tool_contract} tools,
                 multi-turn support and observable traces. Advanced JSON can
                 restrict capabilities or select live-only execution.
               </p>
@@ -384,6 +429,8 @@ function RevisionEditor({
                 supports_multi_turn, trace_available, connection. Connection
                 contains endpoint, deployment, api_version, auth and an approved
                 binding reference only. Never paste plaintext keys or tokens.
+                {" "}VaR requires synthetic-powerplant-var, synthetic-powerplant-v1
+                fixtures and powerplant-decision-v1 tools.
               </p>
               <button
                 className="button secondary align-start"
@@ -403,7 +450,7 @@ function RevisionEditor({
             </>
           )}
           <div className="form-actions">
-            <button className="button" disabled={!label.trim()}>
+            <button className="button" disabled={!label.trim() || !!liveFieldsIncomplete}>
               {create.isPending ? "Creating..." : "Create revision"}
             </button>
             <button
@@ -510,7 +557,8 @@ function AgentDetail({ agent }: { agent: Agent }) {
                   {revision.label} / r{revision.number}
                 </strong>
                 <span className="muted">
-                  {revision.spec.variant} / {revision.spec.modes?.join(", ")}
+                  {revision.spec.adapter} / {revision.spec.variant} /{" "}
+                  {revision.spec.modes?.join(", ")}
                 </span>
               </summary>
               <div className="detail-body">
@@ -527,6 +575,9 @@ function AgentDetail({ agent }: { agent: Agent }) {
                     does not reconstruct historical execution configuration.
                   </Notice>
                 )}
+                <p>
+                  {agentPresets[revision.spec.adapter ?? "synthetic-customer"].hint}
+                </p>
                 <p>
                   {revision.spec.supports_multi_turn
                     ? "Multi-turn supported"
@@ -619,9 +670,9 @@ export default function Agents() {
         }
       />
       <Notice>
-        Multiple logical agents currently reuse one supported adapter:
-        synthetic-customer. Registration does not enable arbitrary endpoints or
-        additional agent protocols.
+        Register a logical agent, then choose Synthetic Customer Lookup or{" "}
+        {agentPresets["synthetic-powerplant-var"].name} when creating its execution revision.
+        {" "}{agentPresets["synthetic-powerplant-var"].hint}
       </Notice>
       {creating && (
         <section className="panel" onChangeCapture={() => setDirty(true)}>

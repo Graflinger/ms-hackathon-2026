@@ -89,6 +89,12 @@ describe("judge launch controls", () => {
       screen.getByText("GOLDENLOOP_ALLOW_LIVE_SYNTHETIC_JUDGE=true"),
     ).toBeVisible();
     expect(screen.getByText("GOLDENLOOP_JUDGE_API_KEY")).toBeVisible();
+    expect(screen.getByText("GOLDENLOOP_JUDGE_AUTH=api_key")).toBeVisible();
+    expect(screen.getByText("GOLDENLOOP_JUDGE_AUTH=azure_cli")).toBeVisible();
+    expect(screen.getByText("az login")).toBeVisible();
+    expect(screen.getByText(/no judge API key is needed/)).toBeVisible();
+    expect(screen.getByText("GOLDENLOOP_JUDGE_TEMPERATURE=default")).toBeVisible();
+    expect(screen.getByText(/to omit the temperature request field/)).toBeVisible();
     fireEvent.submit(button.closest("form")!);
     expect(launch).not.toHaveBeenCalled();
     await user.click(screen.getByLabelText(judgeConsent));

@@ -140,6 +140,7 @@ class ChatSession(ExecutionOwned, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     title: Mapped[str] = mapped_column(String)
     agent_revision: Mapped[str] = mapped_column(String)
+    mode: Mapped[str] = mapped_column(String, default="mock", server_default="mock")
     created_at: Mapped[str] = mapped_column(String, default=now)
     status: Mapped[str] = mapped_column(String, default="idle")
     messages: Mapped[list] = mapped_column(JSON, default=list)

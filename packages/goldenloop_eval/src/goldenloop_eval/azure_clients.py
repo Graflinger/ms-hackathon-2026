@@ -24,7 +24,18 @@ class _ExplicitAzure:
 
 
 class ExplicitAzureOpenAI(_ExplicitAzure, AzureOpenAI):
-    pass
+    def __init__(self, *, owned_credential=None, **kwargs):
+        super().__init__(**kwargs)
+        self._owned_credential = owned_credential
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            credential = getattr(self, "_owned_credential", None)
+            self._owned_credential = None
+            if credential is not None:
+                credential.close()
 
 
 class ExplicitAsyncAzureOpenAI(_ExplicitAzure, AsyncAzureOpenAI):

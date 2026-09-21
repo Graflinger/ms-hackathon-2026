@@ -1382,11 +1382,29 @@ summary:hover {
   font-size: 9px;
   color: #929a82;
 }
-.message > p {
+.message > p,
+.assistant-content > p {
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 13px 0 0;
+}
+.assistant-content .table-scroll,
+.assistant-content > pre {
+  margin-top: 13px;
+}
+.assistant-content > pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.assistant-content th,
+.assistant-content td {
+  padding: 10px;
+  min-width: 90px;
+  max-width: 320px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  vertical-align: top;
 }
 .message-actions {
   display: flex;
